@@ -53,7 +53,7 @@ fn show_main_window(app: &tauri::AppHandle) {
                 }
                 state.backend.start(app);
             }
-            backend::BackendState::Starting => {}
+            backend::BackendState::Installing | backend::BackendState::Starting => {}
         }
     }
 }

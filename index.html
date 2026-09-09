@@ -57,7 +57,8 @@
         vertical-align: 1px;
         background: var(--muted);
       }
-      .status[data-state="starting"] .dot {
+      .status[data-state="starting"] .dot,
+      .status[data-state="installing"] .dot {
         background: var(--warn);
         animation: pulse 1.2s ease-in-out infinite;
       }

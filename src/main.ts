@@ -4,7 +4,7 @@
 import { listen } from "@tauri-apps/api/event";
 import { invoke } from "@tauri-apps/api/core";
 
-type BackendState = "stopped" | "starting" | "running" | "failed";
+type BackendState = "stopped" | "installing" | "starting" | "running" | "failed";
 
 interface BackendStatus {
   state: BackendState;
@@ -20,6 +20,7 @@ const logEl = document.getElementById("log") as HTMLPreElement;
 
 const STATE_TEXT: Record<BackendState, string> = {
   stopped: "后端已停止",
+  installing: "首次启动：正在安装 dsh 运行时…",
   starting: "正在启动 dsh 后端…",
   running: "后端已就绪，正在打开 Web UI…",
   failed: "后端启动失败",

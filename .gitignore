@@ -6,8 +6,9 @@ dist/
 src-tauri/target/
 src-tauri/gen/
 
-# Tauri 自动生成的 sidecar 二进制（node.exe）
+# Tauri 自动生成的 sidecar 二进制与运行时资源（构建前由 scripts/fetch-runtime.mjs 下载）
 src-tauri/binaries/
+src-tauri/resources/
 
 # 日志与本地运行数据
 *.log

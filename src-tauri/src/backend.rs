@@ -1,6 +1,12 @@
-// dsh 后端生命周期状态机：spawn、等待就绪、停止、崩溃重启。
+// dsh 后端生命周期状态机：运行时自检、首次在线安装、spawn、等待就绪、停止、崩溃重启。
 // 设计原则见 docs/桌面端设计方案.md「后端生命周期策略」：
 // 不用即停——关窗驻留托盘时停止后端，点开时重启恢复。
+//
+// 自管运行时（摆脱系统 PATH 依赖）：
+// - node.exe 以 Tauri externalBin 打包（resourcesPath/node.exe 或 dev 时源目录）；
+// - npm CLI 包以 resources 打包（resourcesPath/runtime/npm.tgz），安装时解包到数据目录；
+// - dsh 本体首次启动在线安装（upstream.json pin 精确版本）到数据目录 dsh-runtime/；
+// - 之后直接用 node 跑 dsh 的 lib/bin.js，不经 npx/cmd。
 //
 // 就绪信号与访问 URL 均从 stdout 解析（实测 dsh web 启动后打印
 // `dsh web: http://127.0.0.1:<port>/?token=<...>`；token 是访问凭据，
@@ -8,6 +14,7 @@
 
 use serde::Serialize;
 use std::io::{BufRead, BufReader};
+use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::Mutex;
@@ -18,7 +25,7 @@ use tauri::Manager;
 /// 就绪判定前缀：dsh web 就绪后向 stdout 打印 `dsh web: http://…/?token=…`。
 const READY_PREFIX: &str = "dsh web:";
 
-/// 等待后端就绪的上限；开发模式 npx 首次运行需下载包，故给足余量。
+/// 等待后端就绪的上限；首次含在线安装 dsh 依赖，故给足余量。
 const READY_TIMEOUT: Duration = Duration::from_secs(300);
 
 /// 意外退出后的自动重启次数上限。
@@ -27,10 +34,14 @@ const MAX_AUTO_RESTARTS: u32 = 3;
 /// 后端日志环形缓冲行数。
 const LOG_LINES: usize = 200;
 
+/// dsh npm 包名（安装与入口解析共用）。
+const DSH_PACKAGE: &str = "@deepseek-ai/dsh";
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "lowercase")]
 pub enum BackendState {
     Stopped,
+    Installing,
     Starting,
     Running,
     Failed,
@@ -51,7 +62,10 @@ struct BackendInner {
     message: Option<String>,
     log: std::collections::VecDeque<String>,
     child: Option<Child>,
+    installer: Option<Child>,
     restarts: u32,
+    /// 已就绪过的 dsh 入口路径（安装产物），跨 start/stop 复用避免重复探测。
+    dsh_entry: Option<PathBuf>,
 }
 
 impl BackendInner {
@@ -80,7 +94,9 @@ impl Backend {
                 message: None,
                 log: Default::default(),
                 child: None,
+                installer: None,
                 restarts: 0,
+                dsh_entry: None,
             }),
             generation: AtomicU32::new(0),
         }
@@ -90,11 +106,14 @@ impl Backend {
         self.inner.lock().unwrap().status()
     }
 
-    /// 启动后端。若正在启动/已运行则直接返回，避免重复 spawn。
+    /// 启动后端：必要时先安装，再 spawn。若正在安装/启动/运行则直接返回。
     pub fn start(&self, app: &tauri::AppHandle) {
         {
             let mut inner = self.inner.lock().unwrap();
-            if matches!(inner.state, BackendState::Starting | BackendState::Running) {
+            if matches!(
+                inner.state,
+                BackendState::Installing | BackendState::Starting | BackendState::Running
+            ) {
                 return;
             }
             inner.state = BackendState::Starting;
@@ -105,7 +124,219 @@ impl Backend {
         let generation = self.generation.fetch_add(1, Ordering::SeqCst) + 1;
         emit_status(app);
 
-        match spawn_dsh_web() {
+        let node = resolve_node(app);
+        let dsh_entry = {
+            let inner = self.inner.lock().unwrap();
+            inner
+                .dsh_entry
+                .clone()
+                .or_else(|| resolve_dsh_entry(app, installed_dsh_dir(app)))
+        };
+
+        match (node, dsh_entry) {
+            (Some(node), Some(entry)) => {
+                self.inner.lock().unwrap().dsh_entry = Some(entry.clone());
+                self.spawn_backend(app, generation, node, entry);
+            }
+            (Some(node), None) => {
+                // 尚未安装 dsh：进入在线安装流程，完成后自动继续 start。
+                {
+                    let mut inner = self.inner.lock().unwrap();
+                    inner.state = BackendState::Installing;
+                    inner.message = Some("首次启动：正在安装 dsh 运行时…".into());
+                }
+                emit_status(app);
+                self.install_dsh(app, generation, node);
+            }
+            (None, _) => {
+                let mut inner = self.inner.lock().unwrap();
+                inner.state = BackendState::Failed;
+                inner.message =
+                    Some("找不到内置 node 运行时（resourcesPath/node.exe）".into());
+                drop(inner);
+                emit_status(app);
+            }
+        }
+    }
+
+    /// 首次在线安装：解包内置 npm.tgz → `node npm-cli.js install <dsh>@pin` 到数据目录。
+    /// 安装产物结构：dsh-runtime/node_modules/@deepseek-ai/dsh/lib/bin.js。
+    fn install_dsh(&self, app: &tauri::AppHandle, generation: u32, node: PathBuf) {
+        let Some(npm_tgz) = resolve_npm_tgz(app) else {
+            let mut inner = self.inner.lock().unwrap();
+            inner.state = BackendState::Failed;
+            inner.message = Some("找不到内置 npm 包（resourcesPath/runtime/npm.tgz）".into());
+            drop(inner);
+            emit_status(app);
+            return;
+        };
+        let dsh_version = read_pinned_dsh_version(app).unwrap_or_else(|| "latest".into());
+        let runtime_dir = installed_dsh_dir(app);
+        let npm_home = runtime_dir.join("npm");
+
+        let app_handle = app.clone();
+        thread::spawn(move || {
+            let backend = &app_handle.state::<crate::OtterState>().backend;
+            let progress = |msg: &str| {
+                let mut inner = backend.inner.lock().unwrap();
+                if inner.log.len() >= LOG_LINES {
+                    inner.log.pop_front();
+                }
+                inner.log.push_back(msg.to_string());
+                let status = inner.status();
+                drop(inner);
+                let _ = tauri::Emitter::emit(&app_handle, "backend-status", &status);
+            };
+
+            // 1. 解包 npm.tgz（首次或被清理时）。npm.tgz 内部顶层目录是 package/。
+            if !npm_home.join("package").exists() {
+                progress("正在解包内置 npm…");
+                if let Err(e) = std::fs::create_dir_all(&npm_home) {
+                    progress(&format!("创建目录失败：{e}"));
+                }
+                // 用 tar 解包（Windows 10 1803+ 自带 bsdtar）。
+                let out = Command::new("tar")
+                    .args(["-xzf"])
+                    .arg(&npm_tgz)
+                    .arg("-C")
+                    .arg(&npm_home)
+                    .output();
+                match out {
+                    Ok(o) if o.status.success() => progress("npm 解包完成。"),
+                    Ok(o) => {
+                        let msg = format!(
+                            "npm 解包失败：{}",
+                            String::from_utf8_lossy(&o.stderr).trim()
+                        );
+                        backend.fail_install(&app_handle, msg);
+                        return;
+                    }
+                    Err(e) => {
+                        backend.fail_install(&app_handle, format!("无法运行 tar：{e}"));
+                        return;
+                    }
+                }
+            }
+
+            // 2. npm install dsh@pin（离线缓存优先，registry 走 npmmirror 加速国内）。
+            let npm_cli = npm_home.join("package").join("bin").join("npm-cli.js");
+            progress(&format!("正在安装 {DSH_PACKAGE}@{dsh_version}…"));
+            let install_dir = runtime_dir.join("install");
+            let _ = std::fs::create_dir_all(&install_dir);
+            let manifest = format!(
+                "{{\"name\":\"otter-dsh-install\",\"private\":true,\"dependencies\":{{\"{DSH_PACKAGE}\":\"{dsh_version}\"}}}}"
+            );
+            let _ = std::fs::write(install_dir.join("package.json"), manifest);
+
+            let npm_registry = std::env::var("OTTER_NPM_REGISTRY")
+                .unwrap_or_else(|_| "https://registry.npmmirror.com".into());
+            let child = match Command::new(&node)
+                .arg(&npm_cli)
+                .arg("install")
+                .arg("--no-audit")
+                .arg("--no-fund")
+                .arg("--loglevel=error")
+                .arg("--registry")
+                .arg(&npm_registry)
+                .current_dir(&install_dir)
+                .stdout(Stdio::piped())
+                .stderr(Stdio::piped())
+                .stdin(Stdio::null())
+                .spawn()
+            {
+                Ok(c) => c,
+                Err(e) => {
+                    backend.fail_install(&app_handle, format!("npm install 启动失败：{e}"));
+                    return;
+                }
+            };
+            {
+                let mut inner = backend.inner.lock().unwrap();
+                inner.installer = Some(child);
+            }
+            // 等待安装进程结束（stdout 全量收进日志）。
+            let output = {
+                let mut inner = backend.inner.lock().unwrap();
+                inner
+                    .installer
+                    .take()
+                    .expect("installer 已在 spawn 后记录")
+                    .wait_with_output()
+            };
+            match output {
+                Ok(o) if o.status.success() => {
+                    progress("dsh 安装完成。");
+                }
+                Ok(o) => {
+                    let msg = format!(
+                        "dsh 安装失败：{}",
+                        String::from_utf8_lossy(&o.stderr).trim().chars().take(400).collect::<String>()
+                    );
+                    backend.fail_install(&app_handle, msg);
+                    return;
+                }
+                Err(e) => {
+                    backend.fail_install(&app_handle, format!("等待 npm 失败：{e}"));
+                    return;
+                }
+            }
+
+            // 3. 验证入口存在，清掉 dsh_entry 缓存后重新 start。
+            let entry = install_dir
+                .join("node_modules")
+                .join(DSH_PACKAGE)
+                .join("lib")
+                .join("bin.js");
+            if !entry.exists() {
+                backend.fail_install(
+                    &app_handle,
+                    format!("安装后找不到 dsh 入口：{}", entry.display()),
+                );
+                return;
+            }
+            progress("安装校验通过，正在启动后端…");
+            {
+                let mut inner = backend.inner.lock().unwrap();
+                inner.dsh_entry = None; // 让 start 重新解析（install 子目录属临时布局）
+                inner.state = BackendState::Stopped;
+                inner.installer = None;
+            }
+            if backend.is_current(generation) {
+                backend.start(&app_handle);
+            }
+        });
+    }
+
+    fn fail_install(&self, app: &tauri::AppHandle, msg: String) {
+        let mut inner = self.inner.lock().unwrap();
+        inner.state = BackendState::Failed;
+        inner.message = Some(msg.clone());
+        if inner.log.len() >= LOG_LINES {
+            inner.log.pop_front();
+        }
+        inner.log.push_back(msg);
+        inner.installer = None;
+        let status = inner.status();
+        drop(inner);
+        let _ = tauri::Emitter::emit(app, "backend-status", &status);
+    }
+
+    /// spawn dsh web 并挂监控线程。
+    fn spawn_backend(
+        &self,
+        app: &tauri::AppHandle,
+        generation: u32,
+        node: PathBuf,
+        entry: PathBuf,
+    ) {
+        match Command::new(&node)
+            .arg(&entry)
+            .args(["web", "--no-open", "--port", "0"])
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .stdin(Stdio::null())
+            .spawn()
+        {
             Ok(mut child) => {
                 let stdout = child.stdout.take();
                 let stderr = child.stderr.take();
@@ -128,8 +359,13 @@ impl Backend {
     pub fn stop(&self) {
         self.generation.fetch_add(1, Ordering::SeqCst);
         let mut inner = self.inner.lock().unwrap();
+        if let Some(mut installer) = inner.installer.take() {
+            kill_pid_tree(installer.id());
+            let _ = installer.wait();
+        }
         if let Some(mut child) = inner.child.take() {
-            kill_tree(&mut child);
+            kill_pid_tree(child.id());
+            let _ = child.wait();
         }
         inner.state = BackendState::Stopped;
         inner.url = None;
@@ -157,9 +393,8 @@ impl Backend {
 
 /// 把当前状态广播给壳页面（backend-status 事件）。
 fn emit_status(app: &tauri::AppHandle) {
-    use tauri::Emitter;
     let status = app.state::<crate::OtterState>().backend.status();
-    let _ = app.emit("backend-status", &status);
+    let _ = tauri::Emitter::emit(app, "backend-status", &status);
 }
 
 /// 监控 stdout：解析就绪行（含 token 的 URL）、EOF 即进程退出。
@@ -211,7 +446,7 @@ fn spawn_stdout_monitor(
     });
 }
 
-/// 跟随 stderr：npx 下载进度与错误信息进日志，便于诊断页展示。
+/// 跟随 stderr：错误信息进日志，便于诊断页展示。
 fn spawn_stderr_tail(
     app: tauri::AppHandle,
     generation: u32,
@@ -301,53 +536,121 @@ fn on_monitor_exit(app: &tauri::AppHandle, generation: u32, reason: &str) {
     });
 }
 
-/// 组装并 spawn `dsh web --no-open --port 0`。
-/// 端口交由 OS 分配（dsh 支持 `--port 0`），真实 URL 从 stdout 解析。
-/// stderr 单独管道收集进诊断日志。
-fn spawn_dsh_web() -> std::io::Result<Child> {
-    let (program, args) = resolve_dsh_command();
-    Command::new(program)
-        .args(&args)
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
+// ---------------------------------------------------------------------------
+// 自管运行时路径解析
+// ---------------------------------------------------------------------------
+
+/// 数据目录下的 dsh 运行时根：<appData>/dsh-runtime。
+fn installed_dsh_dir(app: &tauri::AppHandle) -> PathBuf {
+    app.path()
+        .app_data_dir()
+        .expect("app data dir")
+        .join("dsh-runtime")
 }
 
-/// 解析 dsh 启动命令。
-/// 打包环境：环境变量指定 sidecar node.exe + dsh 入口（首次启动安装产物）。
-/// 开发环境：npx @deepseek-ai/dsh（要求 PATH 里有 node/npm）。
-/// Windows 上 npx 是 .cmd 脚本，无法被 CreateProcess 直接执行，需经 cmd /C；
-/// 且 release 子系统不走 shell PATHEXT 解析，故显式找 npx.cmd。
-fn resolve_dsh_command() -> (String, Vec<String>) {
-    if let Ok(node_sidecar) = std::env::var("OTTER_NODE_SIDECAR") {
-        let dsh_entry = std::env::var("OTTER_DSH_ENTRY").unwrap_or_else(|_| "dsh".into());
-        return (
-            node_sidecar,
-            vec![dsh_entry, "web".into(), "--no-open".into(), "--port".into(), "0".into()],
-        );
-    }
-    let dsh_args = vec![
-        "@deepseek-ai/dsh".into(),
-        "web".into(),
-        "--no-open".into(),
-        "--port".into(),
-        "0".into(),
-    ];
-    if cfg!(windows) {
-        ("cmd".into(), ["/C".into(), "npx".into(), "-y".into()].into_iter().chain(dsh_args).collect())
+/// 解析内置 node：打包形态在 exe 同级目录（Tauri externalBin 部署位置），
+/// dev/--no-bundle 形态在 src-tauri/binaries/（带 target triple 后缀）。
+fn resolve_node(app: &tauri::AppHandle) -> Option<PathBuf> {
+    let exe_name = if cfg!(windows) { "node.exe" } else { "node" };
+    let triple_name = if cfg!(windows) {
+        "node-x86_64-pc-windows-msvc.exe"
     } else {
-        ("npx".into(), dsh_args)
+        "node-x86_64-unknown-linux-gnu"
+    };
+    // 1. exe 同级（NSIS 安装形态：externalBin 部署在安装根目录）。
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(dir) = exe.parent() {
+            let node = dir.join(exe_name);
+            if node.exists() {
+                return Some(node);
+            }
+        }
     }
+    // 2. resources 目录（resource_dir 形态兜底）。
+    if let Ok(dir) = app.path().resource_dir() {
+        let node = dir.join(exe_name);
+        if node.exists() {
+            return Some(node);
+        }
+        let sidecar = dir.join(triple_name);
+        if sidecar.exists() {
+            return Some(sidecar);
+        }
+    }
+    // 3. cwd/binaries（dev 从 src-tauri 目录直接跑 target/release 产物时）。
+    if let Ok(cwd) = std::env::current_dir() {
+        let sidecar = cwd.join("binaries").join(triple_name);
+        if sidecar.exists() {
+            return Some(sidecar);
+        }
+    }
+    // 4. debug 兜底：系统 PATH 的 node（未跑 fetch-runtime 的开发机）。
+    if cfg!(debug_assertions) {
+        return which_node_from_path();
+    }
+    None
 }
 
-/// Windows 上无 SIGTERM，用 taskkill /T /F 一次终止 npx→node 整个进程树
+/// dev 兜底：从 PATH 找 node（debug 构建且未跑 fetch-runtime 时）。
+fn which_node_from_path() -> Option<PathBuf> {
+    let path_var = std::env::var("PATH").ok()?;
+    let name = if cfg!(windows) { "node.exe" } else { "node" };
+    for dir in path_var.split(';') {
+        let candidate = Path::new(dir).join(name);
+        if candidate.exists() {
+            return Some(candidate);
+        }
+    }
+    None
+}
+
+/// 解析内置 npm.tgz（打包形态 resourcesPath/runtime/npm.tgz；dev 形态 src-tauri/resources/runtime/）。
+fn resolve_npm_tgz(app: &tauri::AppHandle) -> Option<PathBuf> {
+    if let Ok(dir) = app.path().resource_dir() {
+        let tgz = dir.join("runtime").join("npm.tgz");
+        if tgz.exists() {
+            return Some(tgz);
+        }
+    }
+    std::env::current_dir()
+        .map(|d| d.join("resources").join("runtime").join("npm.tgz"))
+        .ok()
+        .filter(|p| p.exists())
+}
+
+/// 读 upstream.json 里 pin 的 dsh 版本（打包在资源根；dev 在仓库根）。
+fn read_pinned_dsh_version(app: &tauri::AppHandle) -> Option<String> {
+    let candidates = [
+        app.path().resource_dir().ok().map(|d| d.join("upstream.json")),
+        std::env::current_dir()
+            .ok()
+            .map(|d| d.join("..").join("upstream.json")),
+    ];
+    for path in candidates.into_iter().flatten() {
+        if let Ok(text) = std::fs::read_to_string(&path) {
+            if let Ok(v) = serde_json::from_str::<serde_json::Value>(&text) {
+                if let Some(ver) = v.get("dshVersion").and_then(|x| x.as_str()) {
+                    return Some(ver.to_string());
+                }
+            }
+        }
+    }
+    None
+}
+
+/// 解析已安装 dsh 的入口 bin.js（安装布局见 install_dsh）。
+fn resolve_dsh_entry(_app: &tauri::AppHandle, runtime_dir: PathBuf) -> Option<PathBuf> {
+    let entry = runtime_dir
+        .join("install")
+        .join("node_modules")
+        .join(DSH_PACKAGE)
+        .join("lib")
+        .join("bin.js");
+    entry.exists().then_some(entry)
+}
+
+/// Windows 上无 SIGTERM，用 taskkill /T /F 一次终止整个进程树
 /// （实测可同时结束父链并释放监听端口），无需再等宽限超时。
-#[cfg(windows)]
-fn kill_tree(child: &mut Child) {
-    kill_pid_tree(child.id());
-    let _ = child.wait();
-}
-
 #[cfg(windows)]
 fn kill_pid_tree(pid: u32) {
     use std::os::windows::process::CommandExt;
@@ -355,12 +658,6 @@ fn kill_pid_tree(pid: u32) {
         .args(["/PID", &pid.to_string(), "/T", "/F"])
         .creation_flags(0x0800_0000) // CREATE_NO_WINDOW
         .status();
-}
-
-#[cfg(unix)]
-fn kill_tree(child: &mut Child) {
-    kill_pid_tree(child.id());
-    let _ = child.wait();
 }
 
 #[cfg(unix)]
