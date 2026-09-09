@@ -195,12 +195,10 @@ impl Backend {
                     progress(&format!("创建目录失败：{e}"));
                 }
                 // 用 tar 解包（Windows 10 1803+ 自带 bsdtar）。
-                let out = Command::new("tar")
-                    .args(["-xzf"])
-                    .arg(&npm_tgz)
-                    .arg("-C")
-                    .arg(&npm_home)
-                    .output();
+                let mut tar_cmd = Command::new("tar");
+                tar_cmd.args(["-xzf"]).arg(&npm_tgz).arg("-C").arg(&npm_home);
+                set_no_window(&mut tar_cmd);
+                let out = tar_cmd.output();
                 match out {
                     Ok(o) if o.status.success() => progress("npm 解包完成。"),
                     Ok(o) => {
@@ -230,7 +228,8 @@ impl Backend {
 
             let npm_registry = std::env::var("OTTER_NPM_REGISTRY")
                 .unwrap_or_else(|_| "https://registry.npmmirror.com".into());
-            let child = match Command::new(&node)
+            let mut npm_cmd = Command::new(&node);
+            npm_cmd
                 .arg(&npm_cli)
                 .arg("install")
                 .arg("--no-audit")
@@ -241,9 +240,9 @@ impl Backend {
                 .current_dir(&install_dir)
                 .stdout(Stdio::piped())
                 .stderr(Stdio::piped())
-                .stdin(Stdio::null())
-                .spawn()
-            {
+                .stdin(Stdio::null());
+            set_no_window(&mut npm_cmd);
+            let child = match npm_cmd.spawn() {
                 Ok(c) => c,
                 Err(e) => {
                     backend.fail_install(&app_handle, format!("npm install 启动失败：{e}"));
@@ -329,14 +328,14 @@ impl Backend {
         node: PathBuf,
         entry: PathBuf,
     ) {
-        match Command::new(&node)
-            .arg(&entry)
+        let mut cmd = Command::new(&node);
+        cmd.arg(&entry)
             .args(["web", "--no-open", "--port", "0"])
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
-            .stdin(Stdio::null())
-            .spawn()
-        {
+            .stdin(Stdio::null());
+        set_no_window(&mut cmd);
+        match cmd.spawn() {
             Ok(mut child) => {
                 let stdout = child.stdout.take();
                 let stderr = child.stderr.take();
@@ -648,6 +647,17 @@ fn resolve_dsh_entry(_app: &tauri::AppHandle, runtime_dir: PathBuf) -> Option<Pa
         .join("bin.js");
     entry.exists().then_some(entry)
 }
+
+/// Windows 上 GUI 进程启动控制台程序（node/tar/taskkill）时，系统会为新进程
+/// 自动创建一个控制台窗口；CREATE_NO_WINDOW 抑制它。所有子进程必须经过这里。
+#[cfg(windows)]
+pub(crate) fn set_no_window(cmd: &mut Command) {
+    use std::os::windows::process::CommandExt;
+    cmd.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
+}
+
+#[cfg(unix)]
+pub(crate) fn set_no_window(_cmd: &mut Command) {}
 
 /// Windows 上无 SIGTERM，用 taskkill /T /F 一次终止整个进程树
 /// （实测可同时结束父链并释放监听端口），无需再等宽限超时。
