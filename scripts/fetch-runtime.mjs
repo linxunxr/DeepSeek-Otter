@@ -75,5 +75,12 @@ if (force || !(await exists(NPM_DEST))) {
   console.log(`npm 已存在：${NPM_DEST}（--force 重下）`);
 }
 
+// 把 upstream.json 复制到 --no-bundle 产物目录能找到的位置（src-tauri/），
+// 供运行时 pinned_version_candidates 解析；NSIS 形态由 tauri.conf.json resources 打包。
+const upstreamSrc = path.join(root, "upstream.json");
+const upstreamDst = path.join(root, "src-tauri", "upstream.json");
+await writeFile(upstreamDst, await readFile(upstreamSrc, "utf8"), "utf8");
+console.log(`upstream.json → ${upstreamDst}`);
+
 console.log(`upstream pin：node ${nodeVersion}，dsh ${dshVersion}`);
 console.log("完成。dsh 首次启动时由应用在线安装（见 backend.rs install 流程）。");

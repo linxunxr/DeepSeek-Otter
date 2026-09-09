@@ -170,7 +170,11 @@ impl Backend {
             emit_status(app);
             return;
         };
-        let dsh_version = read_pinned_dsh_version(app).unwrap_or_else(|| "latest".into());
+        let dsh_version = read_pinned_dsh_version(app).unwrap_or_else(|| {
+            // pin 缺失属于构建配置错误（upstream.json 未随包分发），显式记录并退化为 latest。
+            eprintln!("警告：未找到 upstream.json，dsh 版本退化为 latest");
+            "latest".into()
+        });
         let runtime_dir = installed_dsh_dir(app);
         let npm_home = runtime_dir.join("npm");
 
@@ -419,8 +423,7 @@ fn spawn_stdout_monitor(
                     if trimmed.is_empty() {
                         continue;
                     }
-                    if let Some(url) = trimmed.strip_prefix(READY_PREFIX) {
-                        let url = url.trim().to_string();
+                    if let Some(url) = parse_ready_url(&trimmed) {
                         backend.push_log(format!("{READY_PREFIX} {url}"));
                         let mut inner = backend.inner.lock().unwrap();
                         if backend.is_current(generation) && inner.state == BackendState::Starting {
@@ -617,24 +620,60 @@ fn resolve_npm_tgz(app: &tauri::AppHandle) -> Option<PathBuf> {
         .filter(|p| p.exists())
 }
 
-/// 读 upstream.json 里 pin 的 dsh 版本（打包在资源根；dev 在仓库根）。
+/// 就绪行解析：`dsh web: http://127.0.0.1:<port>/?token=<…>` → 提取 URL 部分。
+/// 非 dsh 输出行（npm 下载进度、警告等）返回 None。token 是访问凭据必须原样保留。
+/// 行首空白要容忍：子进程 stdout 经管道转发时可能混入缩进（实测 Windows）。
+pub(crate) fn parse_ready_url(line: &str) -> Option<String> {
+    let url = line.trim_start().strip_prefix(READY_PREFIX)?.trim();
+    if url.starts_with("http") {
+        Some(url.to_string())
+    } else {
+        None
+    }
+}
+
+/// 从 upstream.json 文本解析 pin 的 dsh 版本；文本非法或缺字段返回 None。
+/// 独立于 Tauri AppHandle，便于单元测试与 CI 校验。
+pub(crate) fn parse_pinned_dsh_version(json_text: &str) -> Option<String> {
+    serde_json::from_str::<serde_json::Value>(json_text)
+        .ok()?
+        .get("dshVersion")
+        .and_then(|v| v.as_str())
+        .filter(|s| !s.is_empty())
+        .map(|s| s.to_string())
+}
+
+/// 从候选路径列表读 upstream.json 里 pin 的 dsh 版本。
 fn read_pinned_dsh_version(app: &tauri::AppHandle) -> Option<String> {
-    let candidates = [
-        app.path().resource_dir().ok().map(|d| d.join("upstream.json")),
-        std::env::current_dir()
-            .ok()
-            .map(|d| d.join("..").join("upstream.json")),
-    ];
-    for path in candidates.into_iter().flatten() {
+    for path in pinned_version_candidates(app) {
         if let Ok(text) = std::fs::read_to_string(&path) {
-            if let Ok(v) = serde_json::from_str::<serde_json::Value>(&text) {
-                if let Some(ver) = v.get("dshVersion").and_then(|x| x.as_str()) {
-                    return Some(ver.to_string());
-                }
+            if let Some(v) = parse_pinned_dsh_version(&text) {
+                return Some(v);
             }
         }
     }
     None
+}
+
+/// upstream.json 的候选路径：resources（打包形态）、仓库根（dev 形态）、exe 附近（目录形态兜底）。
+fn pinned_version_candidates(app: &tauri::AppHandle) -> Vec<std::path::PathBuf> {
+    let mut out = Vec::new();
+    if let Ok(dir) = app.path().resource_dir() {
+        out.push(dir.join("upstream.json"));
+    }
+    if let Ok(cwd) = std::env::current_dir() {
+        // dev：从 src-tauri cwd 向上到仓库根。
+        out.push(cwd.join("..").join("upstream.json"));
+        out.push(cwd.join("upstream.json"));
+    }
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(dir) = exe.parent() {
+            // --no-bundle 目录形态：资源未收进 resources，exe 同级找。
+            out.push(dir.join("upstream.json"));
+            out.push(dir.join("..").join("upstream.json"));
+        }
+    }
+    out
 }
 
 /// 解析已安装 dsh 的入口 bin.js（安装布局见 install_dsh）。
@@ -676,4 +715,88 @@ fn kill_pid_tree(pid: u32) {
         .arg("-KILL")
         .arg(pid.to_string())
         .status();
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// 就绪行解析：标准格式（实测 dsh 0.1.2-rc.1 输出）。
+    #[test]
+    fn parse_ready_url_standard() {
+        let line = "dsh web: http://127.0.0.1:1902/?token=piYJGZHDTZr6jsJ_8UOMRHkVwDyNu8MjZ";
+        assert_eq!(
+            parse_ready_url(line).as_deref(),
+            Some("http://127.0.0.1:1902/?token=piYJGZHDTZr6jsJ_8UOMRHkVwDyNu8MjZ")
+        );
+    }
+
+    /// 带 \r\n 与多余空白的行也要能解析（Windows 管道输出）。
+    #[test]
+    fn parse_ready_url_whitespace() {
+        assert_eq!(
+            parse_ready_url("  dsh web:   http://127.0.0.1:8080/?token=x  \r\n").as_deref(),
+            Some("http://127.0.0.1:8080/?token=x")
+        );
+    }
+
+    /// 非就绪行（npm 进度、警告、普通日志）不得误判为就绪。
+    #[test]
+    fn parse_ready_url_ignores_noise() {
+        for line in [
+            "",
+            "added 520 packages in 25s",
+            "npm warn deprecated foo@1.0.0",
+            "dsh web:",
+            "dsh web: not-a-url",
+            "some other prefix http://127.0.0.1:1/?token=x",
+        ] {
+            assert!(parse_ready_url(line).is_none(), "误判就绪：{line:?}");
+        }
+    }
+
+    /// URL 必须保留 token 查询串（它是访问凭据，丢失即 401）。
+    #[test]
+    fn parse_ready_url_keeps_token() {
+        let url = parse_ready_url("dsh web: http://127.0.0.1:39021/?token=abc_DEF-123").unwrap();
+        assert!(url.contains("token=abc_DEF-123"), "token 丢失：{url}");
+        assert!(url.starts_with("http://127.0.0.1:"), "非回环地址：{url}");
+    }
+
+    /// upstream.json 解析：合法 pin。
+    #[test]
+    fn parse_pinned_version_ok() {
+        let json = r#"{"nodeVersion":"24.21.0","dshVersion":"0.1.2-rc.1"}"#;
+        assert_eq!(
+            parse_pinned_dsh_version(json).as_deref(),
+            Some("0.1.2-rc.1")
+        );
+    }
+
+    /// upstream.json 解析：缺字段 / 空串 / 非法 JSON / 类型错误都返回 None（退化为 latest 前的判定依据）。
+    #[test]
+    fn parse_pinned_version_rejects_invalid() {
+        for json in [
+            r#"{"nodeVersion":"24.21.0"}"#,
+            r#"{"dshVersion":""}"#,
+            "not json at all",
+            r#"{"dshVersion":123}"#,
+        ] {
+            assert!(parse_pinned_dsh_version(json).is_none(), "应拒绝：{json}");
+        }
+    }
+
+    /// 安装布局约定：install 目录下的 dsh 入口路径组装（跨平台路径分段）。
+    #[test]
+    fn install_layout_entry_path() {
+        let dir = PathBuf::from("C:/appdata/dsh-runtime");
+        let entry = dir
+            .join("install")
+            .join("node_modules")
+            .join(DSH_PACKAGE)
+            .join("lib")
+            .join("bin.js");
+        let s = entry.to_string_lossy().replace('\\', "/");
+        assert!(s.ends_with("node_modules/@deepseek-ai/dsh/lib/bin.js"), "入口路径异常：{s}");
+    }
 }

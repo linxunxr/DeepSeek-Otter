@@ -8,7 +8,13 @@
     "dev": "vite",
     "build": "vite build",
     "preview": "vite preview",
-    "tauri": "tauri"
+    "tauri": "tauri",
+    "typecheck": "tsc --noEmit",
+    "fetch-runtime": "node scripts/fetch-runtime.mjs",
+    "test:unit": "cd src-tauri && cargo test",
+    "smoke": "node scripts/smoke-test.mjs",
+    "smoke:fresh": "node scripts/smoke-test.mjs --fresh",
+    "test": "pnpm typecheck && pnpm test:unit"
   },
   "devDependencies": {
     "@tauri-apps/cli": "^2.11.4",

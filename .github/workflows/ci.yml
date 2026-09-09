@@ -1,0 +1,66 @@
+# CI：Windows 上的检查 → 单测 → 构建 → 冒烟。
+# 冒烟依赖 GUI 会话（WebView2/窗口），windows-latest runner 允许 GUI 进程拉起。
+
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  # 国内镜像加速（runner 在海外也可用，失败时可用 MIRROR/NPM_REGISTRY 覆盖走官方源）
+  MIRROR: https://cdn.npmmirror.com/binaries/node
+  NPM_REGISTRY: https://registry.npmmirror.com
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Rust 缓存
+        uses: swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+
+      - name: 安装依赖
+        run: pnpm install --frozen-lockfile
+
+      - name: 类型检查 + Rust 单测
+        run: pnpm test
+
+      - name: 下载自管运行时（node sidecar + npm）
+        run: node scripts/fetch-runtime.mjs
+
+      - name: 构建（不出安装包）
+        run: pnpm tauri build --no-bundle
+
+      - name: 冒烟测试（首装形态）
+        run: node scripts/smoke-test.mjs --fresh
+
+      - name: 冒烟失败时收集现场
+        if: failure()
+        shell: pwsh
+        run: |
+          $dir = "$env:APPDATA/com.linxunxr.deepseek-otter"
+          if (Test-Path $dir) {
+            Get-ChildItem $dir -Recurse -Depth 3 | Select-Object FullName | Out-String
+          }

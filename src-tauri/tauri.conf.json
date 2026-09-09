@@ -30,7 +30,8 @@
     "icon": ["icons/icon.ico"],
     "externalBin": ["binaries/node"],
     "resources": {
-      "resources/runtime/npm.tgz": "runtime/npm.tgz"
+      "resources/runtime/npm.tgz": "runtime/npm.tgz",
+      "../upstream.json": "upstream.json"
     }
   }
 }
