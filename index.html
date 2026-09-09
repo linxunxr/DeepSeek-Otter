@@ -1,0 +1,127 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>DeepSeek Otter</title>
+    <style>
+      :root {
+        color-scheme: dark;
+        --bg: #0f1115;
+        --fg: #e6e8ee;
+        --muted: #8a93a6;
+        --accent: #4d6bfe;
+        --ok: #2ea44f;
+        --warn: #d29922;
+        --err: #f85149;
+      }
+      * {
+        box-sizing: border-box;
+      }
+      html,
+      body {
+        margin: 0;
+        height: 100%;
+        background: var(--bg);
+        color: var(--fg);
+        font-family: "Segoe UI", "Microsoft YaHei", system-ui, sans-serif;
+        font-size: 14px;
+      }
+      #app {
+        height: 100%;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        gap: 14px;
+        user-select: none;
+      }
+      .logo {
+        font-size: 40px;
+        line-height: 1;
+      }
+      .title {
+        font-size: 18px;
+        font-weight: 600;
+      }
+      .status {
+        color: var(--muted);
+        min-height: 20px;
+      }
+      .status .dot {
+        display: inline-block;
+        width: 8px;
+        height: 8px;
+        border-radius: 50%;
+        margin-right: 6px;
+        vertical-align: 1px;
+        background: var(--muted);
+      }
+      .status[data-state="starting"] .dot {
+        background: var(--warn);
+        animation: pulse 1.2s ease-in-out infinite;
+      }
+      .status[data-state="running"] .dot {
+        background: var(--ok);
+      }
+      .status[data-state="failed"] .dot {
+        background: var(--err);
+      }
+      @keyframes pulse {
+        50% {
+          opacity: 0.3;
+        }
+      }
+      .actions {
+        display: flex;
+        gap: 10px;
+        visibility: hidden;
+      }
+      .actions[data-visible="true"] {
+        visibility: visible;
+      }
+      button {
+        background: var(--accent);
+        border: none;
+        color: #fff;
+        padding: 7px 18px;
+        border-radius: 6px;
+        font-size: 14px;
+        cursor: pointer;
+      }
+      button:hover {
+        filter: brightness(1.1);
+      }
+      .log {
+        width: min(560px, 80vw);
+        height: 180px;
+        overflow: auto;
+        background: #161a22;
+        border: 1px solid #232936;
+        border-radius: 8px;
+        padding: 10px 12px;
+        font-family: Consolas, monospace;
+        font-size: 12px;
+        color: var(--muted);
+        user-select: text;
+      }
+      .log:empty {
+        display: none;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="app">
+      <div class="logo">🦦</div>
+      <div class="title">DeepSeek Otter</div>
+      <div class="status" id="status" data-state="starting">
+        <span class="dot"></span><span id="status-text">正在启动 dsh 后端…</span>
+      </div>
+      <div class="actions" id="actions" data-visible="false">
+        <button id="retry">重试</button>
+      </div>
+      <pre class="log" id="log"></pre>
+    </div>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>

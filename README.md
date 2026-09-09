@@ -4,12 +4,14 @@
 
 ## 现状
 
-项目处于设计阶段，方案见 [docs/桌面端设计方案.md](docs/桌面端设计方案.md)。设计目标按优先级排序：**资源占用低 > 启动快 > 功能全**。核心结论：
+最小闭环已跑通（2026-09-09）：Tauri 2 壳自动拉起 dsh 后端并在窗口中加载官方 Web UI，支持关窗驻留托盘（停止后端）、托盘点开恢复。完整设计见 [docs/桌面端设计方案.md](docs/桌面端设计方案.md)。设计目标按优先级排序：**资源占用低 > 启动快 > 功能全**。核心结论：
 
 - **Tauri 2 薄壳 + 回环加载官方 Web UI**：壳进程 ~15 MB（Rust），用系统 WebView 渲染 dsh Web UI；不自研 UI、不 fork dsh；
 - **后端"不用即停"**：关窗驻留托盘时停止 dsh 后端进程，驻留内存 ~15 MB；
-- **松耦合版本策略**：安装包不内置 dsh，首次启动在线安装 pin 的精确版本；
-- v1 只发 Windows x64（WebView2 与官方 UI 同为 Chromium 内核），macOS 验证后跟进；自动更新走 GitHub Releases。
+- **松耦合版本策略**：安装包不内置 dsh，首次启动在线安装 pin 的精确版本（当前开发模式走 `npx @deepseek-ai/dsh`）；
+- 当前仅验证 Windows x64（WebView2 与官方 UI 同为 Chromium 内核），macOS 验证后跟进。
+
+开发环境要求 Node.js ≥ 22、pnpm、Rust（MSVC）。构建与运行命令见 [AGENTS.md](AGENTS.md)。
 
 ## 文档索引
 

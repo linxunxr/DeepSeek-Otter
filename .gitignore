@@ -1,0 +1,18 @@
+# 依赖
+node_modules/
+
+# 构建产物
+dist/
+src-tauri/target/
+src-tauri/gen/
+
+# Tauri 自动生成的 sidecar 二进制（node.exe）
+src-tauri/binaries/
+
+# 日志与本地运行数据
+*.log
+.DS_Store
+
+# IDE
+.idea/
+.vscode/
