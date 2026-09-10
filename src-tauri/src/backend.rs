@@ -178,6 +178,14 @@ impl Backend {
     /// 产物结构：dsh-runtime/install/node_modules/@deepseek-ai/dsh/lib/bin.js。
     fn install_dsh(&self, app: &tauri::AppHandle, generation: u32, _node: PathBuf) {
         let Some(store_dir) = resolve_dsh_store(app) else {
+            // 诊断信息：落盘候选路径与 exe 位置，store 找不到时定位布局差异。
+            let diag = format!(
+                "找不到内置 dsh 运行库。exe={:?} cwd={:?} resource_dir={:?}",
+                std::env::current_exe(),
+                std::env::current_dir(),
+                app.path().resource_dir()
+            );
+            app.state::<crate::OtterState>().log.log(&diag);
             let mut inner = self.inner.lock().unwrap();
             inner.state = BackendState::Failed;
             inner.message =

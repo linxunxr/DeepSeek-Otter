@@ -64,4 +64,6 @@ jobs:
           $dir = "$env:APPDATA/com.linxunxr.deepseek-otter"
           if (Test-Path $dir) {
             Get-ChildItem $dir -Recurse -Depth 3 | Select-Object FullName | Out-String
+            $log = Get-ChildItem "$dir/logs" -Filter *.log | Select-Object -First 1
+            if ($log) { "=== otter 日志 ==="; Get-Content $log.FullName -Tail 40 }
           }
