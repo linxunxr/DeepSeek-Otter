@@ -1,0 +1,132 @@
+# 发版流水线：tag（v*）触发，产出带签名的 NSIS 安装包并发布双源更新。
+#
+# 流程（对齐设计文档"先降级后升级"）：
+#   1. fetch-runtime（下载 node sidecar + 构建离线 dsh store）
+#   2. tauri build（注入签名私钥，产出 setup.exe + .sig）
+#   3. 冒烟测试（免安装目录形态跑生命周期五步）
+#   4. 上传 GitHub Release（setup.exe + .sig + latest.json[GitHub-URL]）
+#   5. 同步 Gitee 发行版附件（无 GITEE_TOKEN 时脚本自动跳过）
+#   6. 校验 Gitee 附件齐全 → 齐全才提交 Gitee-URL 清单（升级），否则保持 GitHub-URL 清单
+#
+# 必需 Secrets：
+#   TAURI_SIGNING_PRIVATE_KEY        updater 签名私钥内容（~/.tauri/deepseek-otter.key）
+#   GITEE_TOKEN                      Gitee 私人令牌（projects 权限；缺省时自动跳过 Gitee 步骤）
+
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "版本号（不带 v；仅用于重跑发布步骤，tag 必须已存在）"
+        required: true
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  MIRROR: https://cdn.npmmirror.com/binaries/node
+  NPM_REGISTRY: https://registry.npmmirror.com
+  # secrets 不能进 step 级 if，统一经 env 传给脚本（脚本内无 token 自动跳过）。
+  GITEE_TOKEN: ${{ secrets.GITEE_TOKEN }}
+
+jobs:
+  release:
+    runs-on: windows-latest
+    timeout-minutes: 60
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Rust 缓存
+        uses: swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+
+      - name: 安装依赖
+        run: pnpm install --frozen-lockfile
+
+      - name: 生成自管运行时（node + 离线 dsh store）
+        run: node scripts/fetch-runtime.mjs
+
+      - name: 类型检查 + Rust 单测
+        run: pnpm test
+
+      - name: 签名构建（NSIS + updater 产物）
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+        run: pnpm tauri build
+
+      - name: 冒烟测试（发布前守门）
+        run: node scripts/smoke-test.mjs --fresh
+
+      - name: 解析版本号
+        id: ver
+        shell: bash
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "version=${{ inputs.version }}" >> "$GITHUB_OUTPUT"
+          else
+            echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: 生成双更新清单
+        run: node scripts/generate-latest-json.mjs "src-tauri/target/release/bundle/nsis" "v${{ steps.ver.outputs.version }}"
+
+      - name: GitHub 清单改名为 latest.json（updater 稳定 URL 要求）
+        shell: pwsh
+        run: |
+          Copy-Item "src-tauri/target/release/bundle/nsis/latest.github.json" "src-tauri/target/release/bundle/nsis/latest.json"
+
+      - name: 上传 GitHub Release（权威源）
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v${{ steps.ver.outputs.version }}
+          files: |
+            src-tauri/target/release/bundle/nsis/*-setup.exe
+            src-tauri/target/release/bundle/nsis/*-setup.exe.sig
+            src-tauri/target/release/bundle/nsis/latest.json
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Gitee 保底清单（GitHub-URL）
+        run: node scripts/sync-latest-to-gitee.mjs "src-tauri/target/release/bundle/nsis/latest.github.json"
+
+      - name: 同步 Gitee 发行版附件
+        run: node scripts/sync-release-to-gitee.mjs "src-tauri/target/release/bundle/nsis" "v${{ steps.ver.outputs.version }}"
+
+      - name: 校验 Gitee 附件齐全（不齐全则不升级清单）
+        id: verify
+        continue-on-error: true
+        run: node scripts/verify-gitee-assets.mjs "v${{ steps.ver.outputs.version }}" "src-tauri/target/release/bundle/nsis"
+
+      - name: Gitee 升级清单（Gitee-URL，仅附件齐全时）
+        if: steps.verify.outcome == 'success'
+        run: node scripts/sync-latest-to-gitee.mjs "src-tauri/target/release/bundle/nsis/latest.gitee.json"
+
+      - name: 发布摘要
+        shell: bash
+        run: |
+          echo "## 发布摘要" >> "$GITHUB_STEP_SUMMARY"
+          echo "- 版本：v${{ steps.ver.outputs.version }}" >> "$GITHUB_STEP_SUMMARY"
+          echo "- GitHub Release：setup.exe + .sig + latest.json 已上传" >> "$GITHUB_STEP_SUMMARY"
+          if [ "${{ steps.verify.outcome }}" = "success" ]; then
+            echo "- Gitee：附件齐全，已升级为 Gitee-URL 清单（国内主源生效）" >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "- Gitee：附件未齐全或缺令牌，latest.json 保持 GitHub-URL（保底可用）" >> "$GITHUB_STEP_SUMMARY"
+          fi

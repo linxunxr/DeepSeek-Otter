@@ -28,8 +28,7 @@ fn restart_backend(app: tauri::AppHandle) {
 /// 导出诊断包：appData/diagnostics/otter-diag-<时间戳>.txt，
 /// 含壳版本、运行时版本、后端状态与近期日志。返回写入路径。
 #[tauri::command]
-fn export_diagnostics(app: tauri::AppHandle) -> Result<String, String> {
-    use std::fmt::Write as _;
+fn export_diagnostics(app: tauri::AppHandle) -> Result<String, String> {    use std::fmt::Write as _;
     let state = app.state::<OtterState>();
     let status = state.backend.status();
     let now = std::time::SystemTime::now()
@@ -151,6 +150,8 @@ pub fn run() {
             // 第二实例：唤起已有窗口。
             show_main_window(app);
         }))
+        .plugin(tauri_plugin_updater::Builder::new().build())
+        .plugin(tauri_plugin_process::init())
         .invoke_handler(tauri::generate_handler![
             get_backend_status,
             restart_backend,
@@ -196,8 +197,9 @@ pub fn run() {
 
 fn setup_tray(app: &tauri::App) -> tauri::Result<()> {
     let show = MenuItem::with_id(app, "show", "显示 DeepSeek Otter", true, None::<&str>)?;
+    let check_update = MenuItem::with_id(app, "check-update", "检查更新…", true, None::<&str>)?;
     let quit = MenuItem::with_id(app, "quit", "退出", true, None::<&str>)?;
-    let menu = Menu::with_items(app, &[&show, &quit])?;
+    let menu = Menu::with_items(app, &[&show, &check_update, &quit])?;
 
     let mut builder = TrayIconBuilder::with_id("otter-tray")
         .icon(app.default_window_icon().cloned().unwrap())
@@ -205,6 +207,19 @@ fn setup_tray(app: &tauri::App) -> tauri::Result<()> {
         .show_menu_on_left_click(false)
         .on_menu_event(|app, event| match event.id.as_ref() {
             "show" => show_main_window(app),
+            "check-update" => {
+                // 打开壳页面并触发前端更新检查（UI/进度/确认都在壳页面里）。
+                if let Some(window) = app.get_webview_window("main") {
+                    let state = app.state::<OtterState>();
+                    if let Some(url) = state.shell_url() {
+                        let _ = window.navigate(url);
+                    }
+                    let _ = window.show();
+                    let _ = window.set_focus();
+                    use tauri::Emitter;
+                    let _ = window.emit("check-update", ());
+                }
+            }
             "quit" => {
                 app.state::<OtterState>().backend.stop();
                 app.exit(0);

@@ -3,6 +3,7 @@
 
 import { listen } from "@tauri-apps/api/event";
 import { invoke } from "@tauri-apps/api/core";
+import { initUpdaterUI } from "./updater";
 
 type BackendState = "stopped" | "installing" | "starting" | "running" | "failed";
 
@@ -67,6 +68,7 @@ diagBtn?.addEventListener("click", async () => {
 async function main(): Promise<void> {
   render(await invoke<BackendStatus>("get_backend_status"));
   await listen<BackendStatus>("backend-status", (event) => render(event.payload));
+  initUpdaterUI();
 }
 
 void main();

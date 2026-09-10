@@ -21,12 +21,24 @@ pnpm tauri dev
 # 编译 Rust 壳（不出安装包；build.rs 会把 externalBin 复制到 target/release/）
 pnpm tauri build --no-bundle
 
-# 出 NSIS 安装包（~51 MB，含离线 dsh 依赖树）
+# 出 NSIS 安装包（~51 MB，含离线 dsh 依赖树；本地构建需 TAURI_SIGNING_PRIVATE_KEY）
 pnpm tauri build
 
 # 仅构建壳本地页面（产出 dist/）
 pnpm build
 ```
+
+## 发版与热更新
+
+**发版一律走 GitHub Actions**（`.github/workflows/release.yml`），本地只做日常开发验证：
+
+1. 升级 dsh：改 `upstream.json` 的 `dshVersion` → `node scripts/fetch-runtime.mjs` → 提交（lock 入库）。
+2. 改版本号（`package.json` + `src-tauri/tauri.conf.json` + `src-tauri/Cargo.toml` 三处一致）。
+3. 推 tag `v*` → CI 自动：fetch-runtime → 单测 → 签名构建 → 冒烟守门 → 上传 GitHub Release（setup.exe + .sig + latest.json）→ 同步 Gitee（先降级后升级：保底 GitHub-URL 清单 → 附件校验齐全 → 升级 Gitee-URL 清单）。
+
+**必需 Secrets**：`TAURI_SIGNING_PRIVATE_KEY`（updater 私钥内容，`~/.tauri/deepseek-otter.key`，空密码；**丢失即无法向存量用户推更新，需离线备份**）、`GITEE_TOKEN`（Gitee 私人令牌，projects 权限；缺省时 CI 自动跳过 Gitee，仅 GitHub 单源）。
+
+更新链路（客户端）：托盘"检查更新…" → 壳页面展示版本/进度 → 确认后 downloadAndInstall（Windows 安装时应用自动退出重装，重启后版本对齐机制自动处理 appData 的 dsh 重装）。双源 endpoint：Gitee raw `latest.json`（国内主）+ GitHub `releases/latest/download/latest.json`（兜底）；注意 **updater 只在拉清单阶段回退，下载 url 失败不回退**（灵鉴 v0.5.1 事故教训），故发布链路必须"先降级后升级"。
 
 ## 测试
 

@@ -133,17 +133,30 @@ impl Backend {
                 .or_else(|| resolve_dsh_entry(app, installed_dsh_dir(app)))
         };
 
+        // 版本对齐（强绑定的运行时保证）：已装 dsh 的指纹必须与安装包内 store 的
+        // lock 指纹一致；不一致（壳升级携带了新依赖树 / 残留旧安装）→ 视为未安装，
+        // 走离线重装。指纹一致（仅壳升级且依赖树未变）→ 秒开不重装。
+        let dsh_entry = dsh_entry.filter(|_| {
+            let aligned = installed_matches_store(app);
+            if !aligned {
+                app.state::<crate::OtterState>()
+                    .log
+                    .log("[install] 检测到依赖树指纹变化，重新安装 dsh");
+            }
+            aligned
+        });
+
         match (node, dsh_entry) {
             (Some(node), Some(entry)) => {
                 self.inner.lock().unwrap().dsh_entry = Some(entry.clone());
                 self.spawn_backend(app, generation, node, entry);
             }
             (Some(node), None) => {
-                // 尚未安装 dsh：进入在线安装流程，完成后自动继续 start。
+                // 尚未安装 dsh 或指纹不匹配：进入离线安装流程，完成后自动继续 start。
                 {
                     let mut inner = self.inner.lock().unwrap();
                     inner.state = BackendState::Installing;
-                    inner.message = Some("首次启动：正在安装 dsh 运行时…".into());
+                    inner.message = Some("正在安装 dsh 运行库…".into());
                 }
                 emit_status(app);
                 self.install_dsh(app, generation, node);
@@ -237,6 +250,10 @@ impl Backend {
             // package.json/lock 也带上，npm 生态的插件安装未来可复用。
             let _ = std::fs::copy(store_dir.join("package.json"), staging_dir.join("package.json"));
             let _ = std::fs::copy(&store_lock, staging_dir.join("package-lock.json"));
+            // 指纹标记：下次启动比对，依赖树未变（仅壳升级）则跳过重装。
+            if let Some(fp) = store_lock_fingerprint(&store_dir) {
+                let _ = std::fs::write(staging_dir.join(STORE_LOCK_MARKER), &fp);
+            }
 
             let _ = std::fs::remove_dir_all(&install_dir);
             if let Err(e) = std::fs::rename(&staging_dir, &install_dir) {
@@ -692,6 +709,34 @@ fn resolve_dsh_entry(_app: &tauri::AppHandle, runtime_dir: PathBuf) -> Option<Pa
     entry.exists().then_some(entry)
 }
 
+/// 指纹标记文件名（写在 install/ 根，内容为 store lock 的 SHA-256 hex）。
+const STORE_LOCK_MARKER: &str = "STORE_LOCK_SHA";
+
+/// 计算 store 依赖树指纹：package-lock.json 内容的 SHA-256。
+/// lock 完整锁定整棵依赖树，其指纹即"依赖树是否变化"的判据。
+fn store_lock_fingerprint(store_dir: &Path) -> Option<String> {
+    let bytes = std::fs::read(store_dir.join("package-lock.json")).ok()?;
+    use sha2::{Digest, Sha256};
+    let mut hasher = Sha256::new();
+    hasher.update(&bytes);
+    Some(format!("{:x}", hasher.finalize()))
+}
+
+/// 版本对齐检查：appData 已装 dsh 的指纹 == 安装包 store 的指纹。
+/// 指纹文件缺失（更早版本安装的）也视为不一致，触发一次重装补上标记。
+fn installed_matches_store(app: &tauri::AppHandle) -> bool {
+    let Some(store_dir) = resolve_dsh_store(app) else {
+        return false; // 连 store 都没有，install 流程会兜底报错。
+    };
+    let Some(store_fp) = store_lock_fingerprint(&store_dir) else {
+        return false;
+    };
+    match std::fs::read_to_string(installed_dsh_dir(app).join("install").join(STORE_LOCK_MARKER)) {
+        Ok(installed_fp) => installed_fp.trim() == store_fp,
+        Err(_) => false,
+    }
+}
+
 /// Windows 上 GUI 进程启动控制台程序（node/tar/taskkill）时，系统会为新进程
 /// 自动创建一个控制台窗口；CREATE_NO_WINDOW 抑制它。所有子进程必须经过这里。
 #[cfg(windows)]
@@ -818,6 +863,28 @@ mod tests {
         ] {
             assert!(parse_dsh_version_from_lock(lock).is_none(), "应拒绝：{lock}");
         }
+    }
+
+    /// 指纹：同内容同指纹、异内容异指纹（版本对齐的判据基础）。
+    #[test]
+    fn store_fingerprint_stable_and_sensitive() {
+        let dir = std::env::temp_dir().join(format!("otter-fp-test-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let lock_a = dir.join("package-lock.json");
+        std::fs::write(&lock_a, r#"{"packages":{"node_modules/@deepseek-ai/dsh":{"version":"0.1.2-rc.1"}}}"#).unwrap();
+        let fp1 = store_lock_fingerprint(&dir).expect("应能计算指纹");
+        let fp2 = store_lock_fingerprint(&dir).expect("应能计算指纹");
+        assert_eq!(fp1, fp2, "同内容指纹必须稳定");
+        assert_eq!(fp1.len(), 64, "SHA-256 hex 长度：{fp1}");
+        // 内容变化 → 指纹变化。
+        std::fs::write(&lock_a, r#"{"packages":{"node_modules/@deepseek-ai/dsh":{"version":"0.2.0"}}}"#).unwrap();
+        let fp3 = store_lock_fingerprint(&dir).expect("应能计算指纹");
+        assert_ne!(fp1, fp3, "内容变化指纹必须变化");
+        // lock 文件缺失 → None（触发重装路径）。
+        std::fs::remove_file(&lock_a).unwrap();
+        assert!(store_lock_fingerprint(&dir).is_none());
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// 安装布局约定：install 目录下的 dsh 入口路径组装（跨平台路径分段）。
