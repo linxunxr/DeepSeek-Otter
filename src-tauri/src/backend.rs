@@ -245,15 +245,51 @@ impl Backend {
             progress(&format!("版本绑定一致：dsh@{pinned}"));
 
             // 2. 拷贝整树到数据目录（先写 staging 再原子改名，中断不留半成品）。
+            //    用 robocopy /MT：dsh 依赖树是几万个小文件（582 包），CI/慢盘上
+            //    逐文件 fs::copy 会慢到超时（实测本地 17s、CI runner 4min+ 未完成），
+            //    robocopy 多线程是 Windows 上小文件海的最优解。退出码 0-7 都算成功
+            //    （robocopy 语义：≥8 才是错误）。
             let runtime_dir = installed_dsh_dir(&app_handle);
             let install_dir = runtime_dir.join("install");
             let staging_dir = runtime_dir.join("install-staging");
             let _ = std::fs::remove_dir_all(&staging_dir);
             progress("正在安装内置 dsh 运行库（离线）…");
-            if let Err(e) = copy_dir_recursive(&store_dir.join("node_modules"), &staging_dir.join("node_modules")) {
-                backend.fail_install(&app_handle, format!("拷贝依赖树失败：{e}"));
-                let _ = std::fs::remove_dir_all(&staging_dir);
-                return;
+            let mut copy_cmd = Command::new("robocopy");
+            copy_cmd
+                .arg(store_dir.join("node_modules"))
+                .arg(staging_dir.join("node_modules"))
+                .arg("/E")
+                .arg("/MT:16")
+                .arg("/NFL")
+                .arg("/NDL")
+                .arg("/NJH")
+                .arg("/NJS")
+                .arg("/NP");
+            set_no_window(&mut copy_cmd);
+            match copy_cmd.output() {
+                Ok(o) if o.status.code().unwrap_or(1) < 8 => {}
+                Ok(o) => {
+                    let msg = format!(
+                        "拷贝依赖树失败（robocopy {}）：{}",
+                        o.status.code().unwrap_or(-1),
+                        String::from_utf8_lossy(&o.stderr).trim()
+                    );
+                    backend.fail_install(&app_handle, msg);
+                    let _ = std::fs::remove_dir_all(&staging_dir);
+                    return;
+                }
+                Err(e) => {
+                    // robocopy 不可用（非 Windows 或损坏）时回退递归拷贝。
+                    progress(&format!("robocopy 不可用（{e}），回退逐文件拷贝…"));
+                    if let Err(e) = copy_dir_recursive(
+                        &store_dir.join("node_modules"),
+                        &staging_dir.join("node_modules"),
+                    ) {
+                        backend.fail_install(&app_handle, format!("拷贝依赖树失败：{e}"));
+                        let _ = std::fs::remove_dir_all(&staging_dir);
+                        return;
+                    }
+                }
             }
             // package.json/lock 也带上，npm 生态的插件安装未来可复用。
             let _ = std::fs::copy(store_dir.join("package.json"), staging_dir.join("package.json"));

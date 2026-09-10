@@ -150,7 +150,15 @@ async function main() {
   console.log("3. 等待回环端口监听…");
   const port = await waitFor("回环端口", () => findBackendPort(backendPid));
   console.log(`   port=${port}`);
-  const code = await httpStatus(`http://127.0.0.1:${port}/`);
+  // 端口监听出现早于 HTTP 服务完全就绪：404 可能是瞬态，给 30s 重试窗口。
+  let code = 0;
+  const httpCode = () => httpStatus(`http://127.0.0.1:${port}/`);
+  for (let i = 0; i < 15; i++) {
+    code = await httpCode();
+    if (code === 401 || code === 302 || code === 200) break;
+    if (i === 0) console.log(`   GET /（无 token）→ ${code}，等待就绪…`);
+    await sleep(2_000);
+  }
   console.log(`   GET /（无 token）→ ${code}`);
   if (code !== 401 && code !== 302 && code !== 200) {
     fail(`预期 401（或重定向），得到 ${code}`);
