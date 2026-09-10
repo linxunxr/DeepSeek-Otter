@@ -10,8 +10,8 @@
 # 安装依赖（npm 官方源慢/超时时先切镜像：pnpm config set registry https://registry.npmmirror.com）
 pnpm install
 
-# 下载自管运行时（node.exe sidecar + npm.tgz，~92 MB，产物被 .gitignore 忽略）
-# 打包与无 PATH 实测前必须先跑；国内默认走 npmmirror 镜像，可用 MIRROR/NPM_REGISTRY 环境变量覆盖
+# 生成自管运行时（node.exe sidecar + npm.tgz + dsh@pin 完整离线依赖树，~92 MB 下载 + ~268 MB store）
+# 打包前必须先跑；升级 dsh 流程：改 upstream.json 的 dshVersion → 跑本脚本 → 重发 Otter 版本
 node scripts/fetch-runtime.mjs [--force]
 
 # 开发模式：Vite dev server + Rust 壳热编译
@@ -21,7 +21,7 @@ pnpm tauri dev
 # 编译 Rust 壳（不出安装包；build.rs 会把 externalBin 复制到 target/release/）
 pnpm tauri build --no-bundle
 
-# 出 NSIS 安装包
+# 出 NSIS 安装包（~51 MB，含离线 dsh 依赖树）
 pnpm tauri build
 
 # 仅构建壳本地页面（产出 dist/）
@@ -55,7 +55,7 @@ src-tauri/capabilities/   IPC 权限声明（仅授予壳本地页面，不授�
 ## 关键约定
 
 - **薄壳原则**：壳只做进程管理、窗口、托盘、更新；产品本体是 dsh Web UI。不自研聊天 UI，不 fork dsh，不改上游一行代码。
-- **自管运行时（无 PATH 依赖）**：node.exe 以 Tauri externalBin 打包，npm CLI 以 resources 打包；dsh 本体首次启动在线安装（`upstream.json` pin 精确版本，默认 registry 走 npmmirror，可用 `OTTER_NPM_REGISTRY` 覆盖）。安装布局：`<appData>/dsh-runtime/{npm/, install/node_modules/@deepseek-ai/dsh}`。
+- **壳与 dsh 强绑定（离线打包）**：dsh@pin 的完整依赖树打进安装包 resources（`runtime/dsh-store/`），首装纯离线拷贝到 `<appData>/dsh-runtime/install/`，零网络。运行时校验 store lock 与 upstream.json pin 一致，不一致拒绝启动——**升级 dsh 必须重发 Otter 版本**（改 upstream.json → fetch-runtime → 重新打包）。
 - **后端"不用即停"**：关窗 = 隐藏窗口 + 停止后端（见 lib.rs 的 `CloseRequested` 处理）；托盘点开 = 重启后端 + 恢复窗口。改生命周期逻辑时同步更新 `docs/桌面端设计方案.md`。
 - **dsh URL 必须从 stdout 解析**：dsh web 打印 `dsh web: http://127.0.0.1:<port>/?token=<…>`，token 是访问凭据（不带则 401）。壳不自拼 URL。
 - **启动命令**：统一 `<node> <dsh>/lib/bin.js web --no-open --port 0`（OS 分配端口），不经 npx/cmd，摆脱 PATH 依赖。

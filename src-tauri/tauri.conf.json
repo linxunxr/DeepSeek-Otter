@@ -31,6 +31,7 @@
     "externalBin": ["binaries/node"],
     "resources": {
       "resources/runtime/npm.tgz": "runtime/npm.tgz",
+      "resources/runtime/dsh-store": "runtime/dsh-store",
       "../upstream.json": "upstream.json"
     }
   }

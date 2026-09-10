@@ -1,4 +1,5 @@
 {
   "nodeVersion": "24.21.0",
-  "dshVersion": "0.1.2-rc.1"
+  "dshVersion": "0.1.2-rc.1",
+  "comment": "壳与 dsh 强绑定：dshVersion 变更必须重发 Otter 版本；本文件同时打进安装包供运行时校验一致性"
 }

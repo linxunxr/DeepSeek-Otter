@@ -159,24 +159,28 @@ impl Backend {
         }
     }
 
-    /// 首次在线安装：解包内置 npm.tgz → `node npm-cli.js install <dsh>@pin` 到数据目录。
-    /// 安装产物结构：dsh-runtime/node_modules/@deepseek-ai/dsh/lib/bin.js。
-    fn install_dsh(&self, app: &tauri::AppHandle, generation: u32, node: PathBuf) {
-        let Some(npm_tgz) = resolve_npm_tgz(app) else {
+    /// 离线安装：把安装包内置的 dsh-store（含完整 node_modules 依赖树）拷贝到数据目录。
+    /// 壳与 dsh 强绑定（见 upstream.json）：store 里的 dsh 版本必须与 pin 完全一致，
+    /// 否则视为构建配置错误直接失败——升级 dsh 必须重发 Otter 版本。
+    /// 产物结构：dsh-runtime/install/node_modules/@deepseek-ai/dsh/lib/bin.js。
+    fn install_dsh(&self, app: &tauri::AppHandle, generation: u32, _node: PathBuf) {
+        let Some(store_dir) = resolve_dsh_store(app) else {
             let mut inner = self.inner.lock().unwrap();
             inner.state = BackendState::Failed;
-            inner.message = Some("找不到内置 npm 包（resourcesPath/runtime/npm.tgz）".into());
+            inner.message =
+                Some("找不到内置 dsh 运行库（resources/runtime/dsh-store）".into());
             drop(inner);
             emit_status(app);
             return;
         };
-        let dsh_version = read_pinned_dsh_version(app).unwrap_or_else(|| {
-            // pin 缺失属于构建配置错误（upstream.json 未随包分发），显式记录并退化为 latest。
-            eprintln!("警告：未找到 upstream.json，dsh 版本退化为 latest");
-            "latest".into()
-        });
-        let runtime_dir = installed_dsh_dir(app);
-        let npm_home = runtime_dir.join("npm");
+        let Some(pinned) = read_pinned_dsh_version(app) else {
+            let mut inner = self.inner.lock().unwrap();
+            inner.state = BackendState::Failed;
+            inner.message = Some("upstream.json 缺失：无法确定绑定的 dsh 版本".into());
+            drop(inner);
+            emit_status(app);
+            return;
+        };
 
         let app_handle = app.clone();
         thread::spawn(move || {
@@ -196,99 +200,52 @@ impl Backend {
                 let _ = tauri::Emitter::emit(&app_handle, "backend-status", &status);
             };
 
-            // 1. 解包 npm.tgz（首次或被清理时）。npm.tgz 内部顶层目录是 package/。
-            if !npm_home.join("package").exists() {
-                progress("正在解包内置 npm…");
-                if let Err(e) = std::fs::create_dir_all(&npm_home) {
-                    progress(&format!("创建目录失败：{e}"));
-                }
-                // 用 tar 解包（Windows 10 1803+ 自带 bsdtar）。
-                let mut tar_cmd = Command::new("tar");
-                tar_cmd.args(["-xzf"]).arg(&npm_tgz).arg("-C").arg(&npm_home);
-                set_no_window(&mut tar_cmd);
-                let out = tar_cmd.output();
-                match out {
-                    Ok(o) if o.status.success() => progress("npm 解包完成。"),
-                    Ok(o) => {
-                        let msg = format!(
-                            "npm 解包失败：{}",
-                            String::from_utf8_lossy(&o.stderr).trim()
-                        );
-                        backend.fail_install(&app_handle, msg);
-                        return;
-                    }
-                    Err(e) => {
-                        backend.fail_install(&app_handle, format!("无法运行 tar：{e}"));
-                        return;
-                    }
-                }
+            // 1. 强绑定校验：store 的 lock 里 dsh 版本必须等于 pin。
+            let store_lock = store_dir.join("package-lock.json");
+            let Ok(lock_text) = std::fs::read_to_string(&store_lock) else {
+                backend.fail_install(
+                    &app_handle,
+                    format!("无法读取内置依赖锁：{}", store_lock.display()),
+                );
+                return;
+            };
+            let store_version =
+                parse_dsh_version_from_lock(&lock_text).unwrap_or_default();
+            if store_version != pinned {
+                backend.fail_install(
+                    &app_handle,
+                    format!(
+                        "版本绑定不一致：安装包内置 dsh@{store_version}，upstream.json pin 为 {pinned}。
+请重新构建安装包（升级 dsh 必须重发 Otter 版本）。"
+                    ),
+                );
+                return;
             }
+            progress(&format!("版本绑定一致：dsh@{pinned}"));
 
-            // 2. npm install dsh@pin（离线缓存优先，registry 走 npmmirror 加速国内）。
-            let npm_cli = npm_home.join("package").join("bin").join("npm-cli.js");
-            progress(&format!("正在安装 {DSH_PACKAGE}@{dsh_version}…"));
+            // 2. 拷贝整树到数据目录（先写 staging 再原子改名，中断不留半成品）。
+            let runtime_dir = installed_dsh_dir(&app_handle);
             let install_dir = runtime_dir.join("install");
-            let _ = std::fs::create_dir_all(&install_dir);
-            let manifest = format!(
-                "{{\"name\":\"otter-dsh-install\",\"private\":true,\"dependencies\":{{\"{DSH_PACKAGE}\":\"{dsh_version}\"}}}}"
-            );
-            let _ = std::fs::write(install_dir.join("package.json"), manifest);
-
-            let npm_registry = std::env::var("OTTER_NPM_REGISTRY")
-                .unwrap_or_else(|_| "https://registry.npmmirror.com".into());
-            let mut npm_cmd = Command::new(&node);
-            npm_cmd
-                .arg(&npm_cli)
-                .arg("install")
-                .arg("--no-audit")
-                .arg("--no-fund")
-                .arg("--loglevel=error")
-                .arg("--registry")
-                .arg(&npm_registry)
-                .current_dir(&install_dir)
-                .stdout(Stdio::piped())
-                .stderr(Stdio::piped())
-                .stdin(Stdio::null());
-            set_no_window(&mut npm_cmd);
-            let child = match npm_cmd.spawn() {
-                Ok(c) => c,
-                Err(e) => {
-                    backend.fail_install(&app_handle, format!("npm install 启动失败：{e}"));
-                    return;
-                }
-            };
-            {
-                let mut inner = backend.inner.lock().unwrap();
-                inner.installer = Some(child);
+            let staging_dir = runtime_dir.join("install-staging");
+            let _ = std::fs::remove_dir_all(&staging_dir);
+            progress("正在安装内置 dsh 运行库（离线）…");
+            if let Err(e) = copy_dir_recursive(&store_dir.join("node_modules"), &staging_dir.join("node_modules")) {
+                backend.fail_install(&app_handle, format!("拷贝依赖树失败：{e}"));
+                let _ = std::fs::remove_dir_all(&staging_dir);
+                return;
             }
-            // 等待安装进程结束（stdout 全量收进日志）。
-            let output = {
-                let mut inner = backend.inner.lock().unwrap();
-                inner
-                    .installer
-                    .take()
-                    .expect("installer 已在 spawn 后记录")
-                    .wait_with_output()
-            };
-            match output {
-                Ok(o) if o.status.success() => {
-                    progress("dsh 安装完成。");
-                }
-                Ok(o) => {
-                    let msg = format!(
-                        "dsh 安装失败：{}",
-                        String::from_utf8_lossy(&o.stderr).trim().chars().take(400).collect::<String>()
-                    );
-                    backend.fail_install(&app_handle, msg);
-                    return;
-                }
-                Err(e) => {
-                    backend.fail_install(&app_handle, format!("等待 npm 失败：{e}"));
-                    return;
-                }
+            // package.json/lock 也带上，npm 生态的插件安装未来可复用。
+            let _ = std::fs::copy(store_dir.join("package.json"), staging_dir.join("package.json"));
+            let _ = std::fs::copy(&store_lock, staging_dir.join("package-lock.json"));
+
+            let _ = std::fs::remove_dir_all(&install_dir);
+            if let Err(e) = std::fs::rename(&staging_dir, &install_dir) {
+                backend.fail_install(&app_handle, format!("激活安装目录失败：{e}"));
+                let _ = std::fs::remove_dir_all(&staging_dir);
+                return;
             }
 
-            // 3. 验证入口存在，清掉 dsh_entry 缓存后重新 start。
+            // 3. 验证入口后自动启动。
             let entry = install_dir
                 .join("node_modules")
                 .join(DSH_PACKAGE)
@@ -301,10 +258,10 @@ impl Backend {
                 );
                 return;
             }
-            progress("安装校验通过，正在启动后端…");
+            progress("安装完成，正在启动后端…");
             {
                 let mut inner = backend.inner.lock().unwrap();
-                inner.dsh_entry = None; // 让 start 重新解析（install 子目录属临时布局）
+                inner.dsh_entry = None;
                 inner.state = BackendState::Stopped;
                 inner.installer = None;
             }
@@ -612,18 +569,60 @@ fn which_node_from_path() -> Option<PathBuf> {
     None
 }
 
-/// 解析内置 npm.tgz（打包形态 resourcesPath/runtime/npm.tgz；dev 形态 src-tauri/resources/runtime/）。
-fn resolve_npm_tgz(app: &tauri::AppHandle) -> Option<PathBuf> {
+/// 解析内置 dsh 离线 store（打包形态 resourcesPath/runtime/dsh-store；dev 形态
+/// src-tauri/resources/runtime/dsh-store）。store 含 package.json、package-lock.json
+/// 与完整 node_modules 依赖树。
+fn resolve_dsh_store(app: &tauri::AppHandle) -> Option<PathBuf> {
     if let Ok(dir) = app.path().resource_dir() {
-        let tgz = dir.join("runtime").join("npm.tgz");
-        if tgz.exists() {
-            return Some(tgz);
+        let store = dir.join("runtime").join("dsh-store");
+        if store.join("package-lock.json").exists() {
+            return Some(store);
         }
     }
+    // dev / --no-bundle 形态：cwd 从 src-tauri 出发。
     std::env::current_dir()
-        .map(|d| d.join("resources").join("runtime").join("npm.tgz"))
+        .map(|d| d.join("resources").join("runtime").join("dsh-store"))
         .ok()
-        .filter(|p| p.exists())
+        .filter(|p| p.join("package-lock.json").exists())
+}
+
+/// 从 package-lock.json 文本提取 node_modules/@deepseek-ai/dsh 的精确版本
+/// （强绑定校验用）。独立纯函数便于单测。
+pub(crate) fn parse_dsh_version_from_lock(lock_text: &str) -> Option<String> {
+    let v: serde_json::Value = serde_json::from_str(lock_text).ok()?;
+    v.get("packages")?
+        .get("node_modules/@deepseek-ai/dsh")?
+        .get("version")?
+        .as_str()
+        .map(|s| s.to_string())
+}
+
+/// 递归拷贝目录（离线安装 store → appData）。
+fn copy_dir_recursive(src: &Path, dst: &Path) -> std::io::Result<()> {
+    std::fs::create_dir_all(dst)?;
+    for entry in std::fs::read_dir(src)? {
+        let entry = entry?;
+        let ty = entry.file_type()?;
+        let to = dst.join(entry.file_name());
+        if ty.is_dir() {
+            copy_dir_recursive(&entry.path(), &to)?;
+        } else if ty.is_symlink() {
+            // npm 依赖树里的 bin 链接：按目标内容拷贝，避免跨目录符号链接失效。
+            if let Some(parent) = entry.path().parent() {
+                if let Ok(target) = std::fs::read_link(entry.path()) {
+                    let resolved = parent.join(&target);
+                    if resolved.is_dir() {
+                        copy_dir_recursive(&resolved, &to)?;
+                    } else {
+                        let _ = std::fs::copy(&resolved, &to);
+                    }
+                }
+            }
+        } else {
+            std::fs::copy(entry.path(), &to)?;
+        }
+    }
+    Ok(())
 }
 
 /// 就绪行解析：`dsh web: http://127.0.0.1:<port>/?token=<…>` → 提取 URL 部分。
@@ -789,6 +788,35 @@ mod tests {
             r#"{"dshVersion":123}"#,
         ] {
             assert!(parse_pinned_dsh_version(json).is_none(), "应拒绝：{json}");
+        }
+    }
+
+    /// 强绑定校验：从 store 的 package-lock.json 提取 dsh 精确版本。
+    #[test]
+    fn parse_lock_extracts_dsh_version() {
+        let lock = r#"{
+          "name": "otter-dsh-store",
+          "packages": {
+            "": {"name": "otter-dsh-store"},
+            "node_modules/@deepseek-ai/dsh": {"version": "0.1.2-rc.1"},
+            "node_modules/other": {"version": "9.9.9"}
+          }
+        }"#;
+        assert_eq!(
+            parse_dsh_version_from_lock(lock).as_deref(),
+            Some("0.1.2-rc.1")
+        );
+    }
+
+    /// lock 解析：缺 dsh 条目/非法 JSON 返回 None（触发安装失败路径）。
+    #[test]
+    fn parse_lock_rejects_missing() {
+        for lock in [
+            r#"{"packages": {}}"#,
+            r#"{"packages": {"node_modules/other": {"version": "1.0.0"}}}"#,
+            "not json",
+        ] {
+            assert!(parse_dsh_version_from_lock(lock).is_none(), "应拒绝：{lock}");
         }
     }
 
