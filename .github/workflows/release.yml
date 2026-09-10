@@ -64,9 +64,9 @@ jobs:
       - name: 生成自管运行时（node + 离线 dsh store）
         run: node scripts/fetch-runtime.mjs
 
+      # 必须在 fetch-runtime 之后：build.rs 会校验 externalBin/node.exe 存在。
       - name: 类型检查 + Rust 单测
         run: pnpm test
-
       - name: 签名构建（NSIS + updater 产物）
         env:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}

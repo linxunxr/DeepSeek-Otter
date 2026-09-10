@@ -44,11 +44,12 @@ jobs:
       - name: 安装依赖
         run: pnpm install --frozen-lockfile
 
+      - name: 生成自管运行时（node sidecar + npm）
+        run: node scripts/fetch-runtime.mjs
+
+      # 必须在 fetch-runtime 之后：build.rs 会校验 externalBin/node.exe 存在。
       - name: 类型检查 + Rust 单测
         run: pnpm test
-
-      - name: 下载自管运行时（node sidecar + npm）
-        run: node scripts/fetch-runtime.mjs
 
       - name: 构建（不出安装包）
         run: pnpm tauri build --no-bundle
