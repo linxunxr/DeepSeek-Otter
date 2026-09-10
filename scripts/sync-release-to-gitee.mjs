@@ -20,8 +20,8 @@ import { promisify } from "node:util";
 const execFileAsync = promisify(execFile);
 
 const GITEE_API = "https://gitee.com/api/v5";
-const OWNER = process.env.GITEE_OWNER || "linxunxr";
-const REPO = process.env.GITEE_REPO || "DeepSeek-Otter";
+const OWNER = process.env.GITEE_OWNER || "mwcxlinxun";
+const REPO = process.env.GITEE_REPO || "deep-seek-otter";
 const UPLOAD_RETRY = 3;
 const API_TIMEOUT_MS = 30_000;
 

@@ -40,7 +40,7 @@
     "updater": {
       "active": true,
       "endpoints": [
-        "https://gitee.com/linxunxr/DeepSeek-Otter/raw/main/latest.json",
+        "https://gitee.com/mwcxlinxun/deep-seek-otter/raw/main/latest.json",
         "https://github.com/linxunxr/DeepSeek-Otter/releases/latest/download/latest.json"
       ],
       "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEUxNjQ2MEZDODdGNzMyQTAKUldTZ012ZUgvR0JrNFlNRjNIM0txc3h1b1BBdUNWS3E3WFpPVVZLYzFkeXhzaHJ4bjZZK3pvM08K",

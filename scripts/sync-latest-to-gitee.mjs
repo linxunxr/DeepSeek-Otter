@@ -9,8 +9,8 @@ import { readFileSync } from "node:fs";
 import { exit } from "node:process";
 
 const GITEE_API = "https://gitee.com/api/v5";
-const OWNER = process.env.GITEE_OWNER || "linxunxr";
-const REPO = process.env.GITEE_REPO || "DeepSeek-Otter";
+const OWNER = process.env.GITEE_OWNER || "mwcxlinxun";
+const REPO = process.env.GITEE_REPO || "deep-seek-otter";
 const token = process.env.GITEE_TOKEN;
 
 const manifestFile = process.argv[2];

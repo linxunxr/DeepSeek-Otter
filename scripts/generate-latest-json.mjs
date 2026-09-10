@@ -16,7 +16,8 @@ import { exit } from "node:process";
 
 const GITHUB_BASE =
   "https://github.com/linxunxr/DeepSeek-Otter/releases/latest/download";
-const GITEE_BASE = "https://gitee.com/linxunxr/DeepSeek-Otter/releases/download";
+const GITEE_BASE =
+  "https://gitee.com/mwcxlinxun/deep-seek-otter/releases/download";
 
 const distDir = process.argv[2];
 const version = process.argv[3];
