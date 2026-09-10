@@ -586,21 +586,30 @@ fn which_node_from_path() -> Option<PathBuf> {
     None
 }
 
-/// 解析内置 dsh 离线 store（打包形态 resourcesPath/runtime/dsh-store；dev 形态
-/// src-tauri/resources/runtime/dsh-store）。store 含 package.json、package-lock.json
-/// 与完整 node_modules 依赖树。
+/// 解析内置 dsh 离线 store。三种形态（按序解析）：
+/// 1. exe 同级 `runtime/dsh-store`：NSIS 安装与 --no-bundle 目录形态
+///    （build.rs 把 resources 复制到 target/release/，与安装布局一致）；
+/// 2. resource_dir 下 `runtime/dsh-store`：resource_dir 形态兜底；
+/// 3. cwd/resources/runtime/dsh-store：dev 从 src-tauri 目录跑时。
 fn resolve_dsh_store(app: &tauri::AppHandle) -> Option<PathBuf> {
-    if let Ok(dir) = app.path().resource_dir() {
-        let store = dir.join("runtime").join("dsh-store");
-        if store.join("package-lock.json").exists() {
-            return Some(store);
+    let candidates: Vec<PathBuf> = {
+        let mut out = Vec::new();
+        if let Ok(exe) = std::env::current_exe() {
+            if let Some(dir) = exe.parent() {
+                out.push(dir.join("runtime").join("dsh-store"));
+            }
         }
-    }
-    // dev / --no-bundle 形态：cwd 从 src-tauri 出发。
-    std::env::current_dir()
-        .map(|d| d.join("resources").join("runtime").join("dsh-store"))
-        .ok()
-        .filter(|p| p.join("package-lock.json").exists())
+        if let Ok(dir) = app.path().resource_dir() {
+            out.push(dir.join("runtime").join("dsh-store"));
+        }
+        if let Ok(cwd) = std::env::current_dir() {
+            out.push(cwd.join("resources").join("runtime").join("dsh-store"));
+        }
+        out
+    };
+    candidates
+        .into_iter()
+        .find(|p| p.join("package-lock.json").exists())
 }
 
 /// 从 package-lock.json 文本提取 node_modules/@deepseek-ai/dsh 的精确版本
