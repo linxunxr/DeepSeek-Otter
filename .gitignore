@@ -11,6 +11,7 @@ src-tauri/gen/
 src-tauri/binaries/
 src-tauri/resources/runtime/npm.tgz
 src-tauri/resources/runtime/npm-cli-pkg/
+src-tauri/resources/runtime/dsh-store.tar.gz
 src-tauri/resources/runtime/dsh-store/node_modules/
 src-tauri/resources/runtime/dsh-store/.package-lock.json
 # dsh-store 的 package.json / package-lock.json 入库（强绑定的版本记录）

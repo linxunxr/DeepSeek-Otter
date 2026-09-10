@@ -177,7 +177,7 @@ impl Backend {
     /// 否则视为构建配置错误直接失败——升级 dsh 必须重发 Otter 版本。
     /// 产物结构：dsh-runtime/install/node_modules/@deepseek-ai/dsh/lib/bin.js。
     fn install_dsh(&self, app: &tauri::AppHandle, generation: u32, _node: PathBuf) {
-        let Some(store_dir) = resolve_dsh_store(app) else {
+        let Some((store_tar, store_lock)) = resolve_dsh_store(app) else {
             // 诊断信息：落盘候选路径与 exe 位置，store 找不到时定位布局差异。
             let diag = format!(
                 "找不到内置 dsh 运行库。exe={:?} cwd={:?} resource_dir={:?}",
@@ -222,7 +222,6 @@ impl Backend {
             };
 
             // 1. 强绑定校验：store 的 lock 里 dsh 版本必须等于 pin。
-            let store_lock = store_dir.join("package-lock.json");
             let Ok(lock_text) = std::fs::read_to_string(&store_lock) else {
                 backend.fail_install(
                     &app_handle,
@@ -244,16 +243,14 @@ impl Backend {
             }
             progress(&format!("版本绑定一致：dsh@{pinned}"));
 
-            // 2. 拷贝整树到数据目录（先写 staging 再原子改名，中断不留半成品）。
-            //    用 robocopy /MT：dsh 依赖树是几万个小文件（582 包），CI/慢盘上
-            //    逐文件 fs::copy 会慢到超时（实测本地 17s、CI runner 4min+ 未完成），
-            //    robocopy 多线程是 Windows 上小文件海的最优解。退出码 0-7 都算成功
-            //    （robocopy 语义：≥8 才是错误）。
+            // 2. 解包 tar 到 staging 再原子激活（中断不留半成品）。
+            //    store 打成单归档（~48MB 压缩）：解包是顺序流式写，远快于
+            //    拷贝几万小文件（CI 慢盘实测后者 4min+ 超时，本地解包 13s）。
             let runtime_dir = installed_dsh_dir(&app_handle);
             let install_dir = runtime_dir.join("install");
             let staging_dir = runtime_dir.join("install-staging");
             // 残留 staging/旧 install 的删除放后台线程：几万小文件在慢盘上同步删
-            // 会阻塞安装主流程（CI 实测 4min+ 超时），改名让出路径后异步清理即可。
+            // 会阻塞安装主流程，改名让出路径后异步清理即可。
             let trash_dir = runtime_dir.join("install-trash");
             let _ = std::fs::rename(&trash_dir, runtime_dir.join("install-trash-old"));
             for stale in [&staging_dir, &install_dir] {
@@ -271,48 +268,34 @@ impl Backend {
                 );
             });
             progress("正在安装内置 dsh 运行库（离线）…");
-            let mut copy_cmd = Command::new("robocopy");
-            copy_cmd
-                .arg(store_dir.join("node_modules"))
-                .arg(staging_dir.join("node_modules"))
-                .arg("/E")
-                .arg("/MT:16")
-                .arg("/NFL")
-                .arg("/NDL")
-                .arg("/NJH")
-                .arg("/NJS")
-                .arg("/NP");
-            set_no_window(&mut copy_cmd);
-            match copy_cmd.output() {
-                Ok(o) if o.status.code().unwrap_or(1) < 8 => {}
+            let _ = std::fs::create_dir_all(&staging_dir);
+            // 不加 --force-local：Windows 的 Command 解析到 System32 bsdtar，
+            // 该 GNU 专属参数会直接报错；bsdtar 对盘符路径本无歧义。
+            let mut tar_cmd = Command::new("tar");
+            tar_cmd
+                .arg("-xzf")
+                .arg(&store_tar)
+                .arg("-C")
+                .arg(&staging_dir);
+            set_no_window(&mut tar_cmd);
+            match tar_cmd.output() {
+                Ok(o) if o.status.success() => {}
                 Ok(o) => {
                     let msg = format!(
-                        "拷贝依赖树失败（robocopy {}）：{}",
-                        o.status.code().unwrap_or(-1),
-                        String::from_utf8_lossy(&o.stderr).trim()
+                        "解包依赖树失败：{}",
+                        String::from_utf8_lossy(&o.stderr).trim().chars().take(300).collect::<String>()
                     );
                     backend.fail_install(&app_handle, msg);
                     let _ = std::fs::remove_dir_all(&staging_dir);
                     return;
                 }
                 Err(e) => {
-                    // robocopy 不可用（非 Windows 或损坏）时回退递归拷贝。
-                    progress(&format!("robocopy 不可用（{e}），回退逐文件拷贝…"));
-                    if let Err(e) = copy_dir_recursive(
-                        &store_dir.join("node_modules"),
-                        &staging_dir.join("node_modules"),
-                    ) {
-                        backend.fail_install(&app_handle, format!("拷贝依赖树失败：{e}"));
-                        let _ = std::fs::remove_dir_all(&staging_dir);
-                        return;
-                    }
+                    backend.fail_install(&app_handle, format!("无法运行 tar：{e}"));
+                    return;
                 }
             }
-            // package.json/lock 也带上，npm 生态的插件安装未来可复用。
-            let _ = std::fs::copy(store_dir.join("package.json"), staging_dir.join("package.json"));
-            let _ = std::fs::copy(&store_lock, staging_dir.join("package-lock.json"));
-            // 指纹标记：下次启动比对，依赖树未变（仅壳升级）则跳过重装。
-            if let Some(fp) = store_lock_fingerprint(&store_dir) {
+            // tar 内已含 package.json/lock；这里只写指纹标记。
+            if let Some(fp) = lock_fingerprint(&lock_text) {
                 let _ = std::fs::write(staging_dir.join(STORE_LOCK_MARKER), &fp);
             }
 
@@ -647,30 +630,32 @@ fn which_node_from_path() -> Option<PathBuf> {
     None
 }
 
-/// 解析内置 dsh 离线 store。三种形态（按序解析）：
-/// 1. exe 同级 `runtime/dsh-store`：NSIS 安装与 --no-bundle 目录形态
+/// 解析内置 dsh 离线 store 的 tar 归档与 lock 文件。三种形态（按序解析）：
+/// 1. exe 同级 `runtime/`：NSIS 安装与 --no-bundle 目录形态
 ///    （build.rs 把 resources 复制到 target/release/，与安装布局一致）；
-/// 2. resource_dir 下 `runtime/dsh-store`：resource_dir 形态兜底；
-/// 3. cwd/resources/runtime/dsh-store：dev 从 src-tauri 目录跑时。
-fn resolve_dsh_store(app: &tauri::AppHandle) -> Option<PathBuf> {
+/// 2. resource_dir 下 `runtime/`：resource_dir 形态兜底；
+/// 3. cwd/resources/runtime/：dev 从 src-tauri 目录跑时。
+/// 返回 (tar.gz 路径, lock 路径)；lock 单独随包分发用于强绑定校验（不必解开 tar）。
+fn resolve_dsh_store(app: &tauri::AppHandle) -> Option<(PathBuf, PathBuf)> {
     let candidates: Vec<PathBuf> = {
         let mut out = Vec::new();
         if let Ok(exe) = std::env::current_exe() {
             if let Some(dir) = exe.parent() {
-                out.push(dir.join("runtime").join("dsh-store"));
+                out.push(dir.join("runtime"));
             }
         }
         if let Ok(dir) = app.path().resource_dir() {
-            out.push(dir.join("runtime").join("dsh-store"));
+            out.push(dir.join("runtime"));
         }
         if let Ok(cwd) = std::env::current_dir() {
-            out.push(cwd.join("resources").join("runtime").join("dsh-store"));
+            out.push(cwd.join("resources").join("runtime"));
         }
         out
     };
     candidates
         .into_iter()
-        .find(|p| p.join("package-lock.json").exists())
+        .find(|dir| dir.join("dsh-store.tar.gz").exists() && dir.join("dsh-store").join("package-lock.json").exists())
+        .map(|dir| (dir.join("dsh-store.tar.gz"), dir.join("dsh-store").join("package-lock.json")))
 }
 
 /// 从 package-lock.json 文本提取 node_modules/@deepseek-ai/dsh 的精确版本
@@ -682,34 +667,6 @@ pub(crate) fn parse_dsh_version_from_lock(lock_text: &str) -> Option<String> {
         .get("version")?
         .as_str()
         .map(|s| s.to_string())
-}
-
-/// 递归拷贝目录（离线安装 store → appData）。
-fn copy_dir_recursive(src: &Path, dst: &Path) -> std::io::Result<()> {
-    std::fs::create_dir_all(dst)?;
-    for entry in std::fs::read_dir(src)? {
-        let entry = entry?;
-        let ty = entry.file_type()?;
-        let to = dst.join(entry.file_name());
-        if ty.is_dir() {
-            copy_dir_recursive(&entry.path(), &to)?;
-        } else if ty.is_symlink() {
-            // npm 依赖树里的 bin 链接：按目标内容拷贝，避免跨目录符号链接失效。
-            if let Some(parent) = entry.path().parent() {
-                if let Ok(target) = std::fs::read_link(entry.path()) {
-                    let resolved = parent.join(&target);
-                    if resolved.is_dir() {
-                        copy_dir_recursive(&resolved, &to)?;
-                    } else {
-                        let _ = std::fs::copy(&resolved, &to);
-                    }
-                }
-            }
-        } else {
-            std::fs::copy(entry.path(), &to)?;
-        }
-    }
-    Ok(())
 }
 
 /// 就绪行解析：`dsh web: http://127.0.0.1:<port>/?token=<…>` → 提取 URL 部分。
@@ -782,23 +739,22 @@ fn resolve_dsh_entry(_app: &tauri::AppHandle, runtime_dir: PathBuf) -> Option<Pa
 /// 指纹标记文件名（写在 install/ 根，内容为 store lock 的 SHA-256 hex）。
 const STORE_LOCK_MARKER: &str = "STORE_LOCK_SHA";
 
-/// 计算 store 依赖树指纹：package-lock.json 内容的 SHA-256。
-/// lock 完整锁定整棵依赖树，其指纹即"依赖树是否变化"的判据。
-fn store_lock_fingerprint(store_dir: &Path) -> Option<String> {
-    let bytes = std::fs::read(store_dir.join("package-lock.json")).ok()?;
+/// 计算 lock 文本指纹（SHA-256 hex）。lock 完整锁定整棵依赖树，
+/// 其指纹即"依赖树是否变化"的判据。
+fn lock_fingerprint(lock_text: &str) -> Option<String> {
     use sha2::{Digest, Sha256};
     let mut hasher = Sha256::new();
-    hasher.update(&bytes);
+    hasher.update(lock_text.as_bytes());
     Some(format!("{:x}", hasher.finalize()))
 }
 
 /// 版本对齐检查：appData 已装 dsh 的指纹 == 安装包 store 的指纹。
 /// 指纹文件缺失（更早版本安装的）也视为不一致，触发一次重装补上标记。
 fn installed_matches_store(app: &tauri::AppHandle) -> bool {
-    let Some(store_dir) = resolve_dsh_store(app) else {
+    let Some((_store_tar, store_lock)) = resolve_dsh_store(app) else {
         return false; // 连 store 都没有，install 流程会兜底报错。
     };
-    let Some(store_fp) = store_lock_fingerprint(&store_dir) else {
+    let Some(store_fp) = std::fs::read_to_string(&store_lock).ok().and_then(|t| lock_fingerprint(&t)) else {
         return false;
     };
     match std::fs::read_to_string(installed_dsh_dir(app).join("install").join(STORE_LOCK_MARKER)) {
@@ -938,23 +894,15 @@ mod tests {
     /// 指纹：同内容同指纹、异内容异指纹（版本对齐的判据基础）。
     #[test]
     fn store_fingerprint_stable_and_sensitive() {
-        let dir = std::env::temp_dir().join(format!("otter-fp-test-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
-        let lock_a = dir.join("package-lock.json");
-        std::fs::write(&lock_a, r#"{"packages":{"node_modules/@deepseek-ai/dsh":{"version":"0.1.2-rc.1"}}}"#).unwrap();
-        let fp1 = store_lock_fingerprint(&dir).expect("应能计算指纹");
-        let fp2 = store_lock_fingerprint(&dir).expect("应能计算指纹");
+        let lock_a = r#"{"packages":{"node_modules/@deepseek-ai/dsh":{"version":"0.1.2-rc.1"}}}"#;
+        let fp1 = lock_fingerprint(lock_a).expect("应能计算指纹");
+        let fp2 = lock_fingerprint(lock_a).expect("应能计算指纹");
         assert_eq!(fp1, fp2, "同内容指纹必须稳定");
         assert_eq!(fp1.len(), 64, "SHA-256 hex 长度：{fp1}");
         // 内容变化 → 指纹变化。
-        std::fs::write(&lock_a, r#"{"packages":{"node_modules/@deepseek-ai/dsh":{"version":"0.2.0"}}}"#).unwrap();
-        let fp3 = store_lock_fingerprint(&dir).expect("应能计算指纹");
+        let lock_b = r#"{"packages":{"node_modules/@deepseek-ai/dsh":{"version":"0.2.0"}}}"#;
+        let fp3 = lock_fingerprint(lock_b).expect("应能计算指纹");
         assert_ne!(fp1, fp3, "内容变化指纹必须变化");
-        // lock 文件缺失 → None（触发重装路径）。
-        std::fs::remove_file(&lock_a).unwrap();
-        assert!(store_lock_fingerprint(&dir).is_none());
-        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// 安装布局约定：install 目录下的 dsh 入口路径组装（跨平台路径分段）。

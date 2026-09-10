@@ -158,6 +158,14 @@ if (dshChanged) {
   }
 }
 
+// 把 store 整树打成单个 tar.gz：安装包体积从 268MB 降到 ~48MB（压缩），
+// 且运行时首装是"解包一个归档"而非"拷贝几万小文件"——CI/慢盘上后者会超时。
+const STORE_TAR = path.join(resDir, "dsh-store.tar.gz");
+console.log("打包 dsh-store.tar.gz…");
+execFileSync("tar", ["--force-local", "-czf", STORE_TAR.replaceAll("\\", "/"), "-C", storeDir.replaceAll("\\", "/"), "node_modules", "package.json", "package-lock.json"], { stdio: "inherit" });
+const { size: tarSize } = await stat(STORE_TAR);
+console.log(`  dsh-store.tar.gz（${(tarSize / 1024 / 1024).toFixed(1)} MB）`);
+
 // 把 upstream.json 复制到 --no-bundle 产物目录能找到的位置（src-tauri/），
 // 供运行时 pinned_version_candidates 解析；NSIS 形态由 tauri.conf.json resources 打包。
 const upstreamSrc = path.join(root, "upstream.json");

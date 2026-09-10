@@ -32,7 +32,8 @@
     "externalBin": ["binaries/node"],
     "resources": {
       "resources/runtime/npm.tgz": "runtime/npm.tgz",
-      "resources/runtime/dsh-store": "runtime/dsh-store",
+      "resources/runtime/dsh-store.tar.gz": "runtime/dsh-store.tar.gz",
+      "resources/runtime/dsh-store/package-lock.json": "runtime/dsh-store/package-lock.json",
       "../upstream.json": "upstream.json"
     }
   },
