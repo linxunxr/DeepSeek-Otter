@@ -252,7 +252,24 @@ impl Backend {
             let runtime_dir = installed_dsh_dir(&app_handle);
             let install_dir = runtime_dir.join("install");
             let staging_dir = runtime_dir.join("install-staging");
-            let _ = std::fs::remove_dir_all(&staging_dir);
+            // 残留 staging/旧 install 的删除放后台线程：几万小文件在慢盘上同步删
+            // 会阻塞安装主流程（CI 实测 4min+ 超时），改名让出路径后异步清理即可。
+            let trash_dir = runtime_dir.join("install-trash");
+            let _ = std::fs::rename(&trash_dir, runtime_dir.join("install-trash-old"));
+            for stale in [&staging_dir, &install_dir] {
+                if stale.exists() {
+                    if std::fs::rename(stale, &trash_dir).is_err() {
+                        let _ = std::fs::remove_dir_all(stale);
+                    }
+                }
+            }
+            let trash_cleaner = trash_dir.clone();
+            thread::spawn(move || {
+                let _ = std::fs::remove_dir_all(&trash_cleaner);
+                let _ = std::fs::remove_dir_all(
+                    trash_cleaner.parent().map(|p| p.join("install-trash-old")).unwrap_or(trash_cleaner.clone()),
+                );
+            });
             progress("正在安装内置 dsh 运行库（离线）…");
             let mut copy_cmd = Command::new("robocopy");
             copy_cmd
@@ -299,7 +316,7 @@ impl Backend {
                 let _ = std::fs::write(staging_dir.join(STORE_LOCK_MARKER), &fp);
             }
 
-            let _ = std::fs::remove_dir_all(&install_dir);
+            // install_dir 已在前面改名让路（异步清理中），staging 直接原子激活。
             if let Err(e) = std::fs::rename(&staging_dir, &install_dir) {
                 backend.fail_install(&app_handle, format!("激活安装目录失败：{e}"));
                 let _ = std::fs::remove_dir_all(&staging_dir);
