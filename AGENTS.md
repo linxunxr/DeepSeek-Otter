@@ -44,9 +44,10 @@ pnpm smoke:fresh       # 冒烟：首装形态（删 appData，含在线安装 d
 
 ```text
 index.html / src/         壳本地页面（加载页/诊断页，纯 TS，无框架）
-src-tauri/src/lib.rs      壳入口：窗口、托盘、单实例、关窗驻留、IPC 命令
-src-tauri/src/backend.rs  dsh 后端生命周期状态机（spawn/就绪解析/停止/自动重启）
-src-tauri/src/state.rs    全局状态（目前只有 Backend）
+src-tauri/src/lib.rs      壳入口：窗口、托盘、单实例、关窗驻留、IPC 命令、诊断导出
+src-tauri/src/backend.rs  dsh 后端生命周期状态机（安装/spawn/就绪解析/停止/自动重启）
+src-tauri/src/logging.rs  落盘日志（appData/logs/otter-<日期>.log，按天滚动保留 7 份）
+src-tauri/src/state.rs    全局状态（Backend + FileLog + 壳页面 URL）
 src-tauri/tauri.conf.json Tauri 配置（窗口、打包目标、capability 绑定）
 src-tauri/capabilities/   IPC 权限声明（仅授予壳本地页面，不授予回环 dsh 页面）
 ```
@@ -65,5 +66,7 @@ src-tauri/capabilities/   IPC 权限声明（仅授予壳本地页面，不授�
 ## 已知坑
 
 - dsh 处于 developer preview，破坏性变更频发；每次发版前跑冒烟清单（启动 → 新建会话 → 发消息 → 关窗再开）。
+- `pnpm tauri build` 首次会从 GitHub 下载 NSIS（~2.4 MB），网络差会 `unexpected end of file` 失败；手动下载 nsis-3.11.zip 解压到 `%LOCALAPPDATA%\tauri\nsis-3.11\` 再重试。
 - `pnpm tauri build` 需要有效图标（`src-tauri/icons/icon.ico`，当前是占位图标）。
-- Git Bash 管道下 `taskkill` 输出中文乱码是编码问题，不影响功能。
+- Git Bash 里传 `/S /D=` 给 NSIS 安装器会被 MSYS 路径转换破坏参数，静默安装/卸载用 PowerShell `Start-Process -ArgumentList` 执行。
+- Git Bash 管道下 `taskkill` 输出与日志 `cat` 的中文乱码是编码问题，不影响功能（日志文件本身 UTF-8 正常）。

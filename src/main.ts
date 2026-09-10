@@ -29,13 +29,39 @@ const STATE_TEXT: Record<BackendState, string> = {
 function render(status: BackendStatus): void {
   statusEl.dataset.state = status.state;
   statusTextEl.textContent = status.message ?? STATE_TEXT[status.state];
-  actionsEl.dataset.visible = status.state === "failed" ? "true" : "false";
+  const failed = status.state === "failed";
+  actionsEl.dataset.visible = failed ? "true" : "false";
+  if (!failed) {
+    const diag = document.getElementById("export-diag");
+    if (diag instanceof HTMLButtonElement) {
+      diag.textContent = "导出诊断包";
+    }
+  }
   logEl.textContent = status.recentLog.join("\n");
   logEl.scrollTop = logEl.scrollHeight;
 }
 
 document.getElementById("retry")?.addEventListener("click", () => {
   void invoke("restart_backend");
+});
+
+const diagBtn = document.getElementById("export-diag");
+diagBtn?.addEventListener("click", async () => {
+  if (diagBtn instanceof HTMLButtonElement) {
+    diagBtn.disabled = true;
+    diagBtn.textContent = "导出中…";
+    try {
+      const path = await invoke<string>("export_diagnostics");
+      diagBtn.textContent = `已导出：${path}`;
+    } catch (e) {
+      diagBtn.textContent = `导出失败：${e}`;
+    } finally {
+      setTimeout(() => {
+        diagBtn.disabled = false;
+        diagBtn.textContent = "导出诊断包";
+      }, 4000);
+    }
+  }
 });
 
 async function main(): Promise<void> {

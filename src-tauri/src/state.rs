@@ -1,18 +1,21 @@
-// 壳全局状态：dsh 后端生命周期状态机 + 壳页面 URL。
+// 壳全局状态：dsh 后端生命周期状态机 + 壳页面 URL + 落盘日志。
 
 use crate::backend::Backend;
+use crate::logging::FileLog;
 use std::sync::Mutex;
 use tauri::Url;
 
 pub struct OtterState {
     pub backend: Backend,
+    pub log: FileLog,
     shell_url: Mutex<Option<Url>>,
 }
 
 impl OtterState {
-    pub fn new() -> Self {
+    pub fn new(app_data_dir: std::path::PathBuf) -> Self {
         Self {
             backend: Backend::new(),
+            log: FileLog::new(app_data_dir.join("logs")),
             shell_url: Mutex::new(None),
         }
     }

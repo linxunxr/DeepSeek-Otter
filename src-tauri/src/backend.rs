@@ -182,6 +182,10 @@ impl Backend {
         thread::spawn(move || {
             let backend = &app_handle.state::<crate::OtterState>().backend;
             let progress = |msg: &str| {
+                app_handle
+                    .state::<crate::OtterState>()
+                    .log
+                    .log(&format!("[install] {msg}"));
                 let mut inner = backend.inner.lock().unwrap();
                 if inner.log.len() >= LOG_LINES {
                     inner.log.pop_front();
@@ -381,7 +385,9 @@ impl Backend {
         self.start(app);
     }
 
-    fn push_log(&self, line: String) {
+    fn push_log(&self, app: &tauri::AppHandle, line: String) {
+        // 内存环形缓冲（前端展示）+ 落盘（诊断导出）双写。
+        app.state::<crate::OtterState>().log.log(&line);
         let mut inner = self.inner.lock().unwrap();
         if inner.log.len() >= LOG_LINES {
             inner.log.pop_front();
@@ -424,7 +430,7 @@ fn spawn_stdout_monitor(
                         continue;
                     }
                     if let Some(url) = parse_ready_url(&trimmed) {
-                        backend.push_log(format!("{READY_PREFIX} {url}"));
+                        backend.push_log(&app, format!("{READY_PREFIX} {url}"));
                         let mut inner = backend.inner.lock().unwrap();
                         if backend.is_current(generation) && inner.state == BackendState::Starting {
                             inner.state = BackendState::Running;
@@ -436,7 +442,7 @@ fn spawn_stdout_monitor(
                         }
                         return;
                     }
-                    backend.push_log(trimmed);
+                    backend.push_log(&app, trimmed);
                     emit_status(&app);
                 }
                 Err(_) => {
@@ -468,7 +474,7 @@ fn spawn_stderr_tail(
                     if trimmed.is_empty() || !backend.is_current(generation) {
                         continue;
                     }
-                    backend.push_log(trimmed);
+                    backend.push_log(&app, trimmed);
                     emit_status(&app);
                 }
             }
