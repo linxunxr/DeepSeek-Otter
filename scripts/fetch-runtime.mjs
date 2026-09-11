@@ -103,10 +103,12 @@ async function buildDshStore() {
   if (!(await exists(path.join(npmExtract, "package", "bin", "npm-cli.js")))) {
     await rm(npmExtract, { recursive: true, force: true });
     await mkdir(npmExtract, { recursive: true });
-    // GNU tar 会把 "D:/..." 当远程主机（盘符冒号歧义）；--force-local 禁用该解释。
-    const tgz = NPM_DEST.replaceAll("\\", "/");
-    const dest = npmExtract.replaceAll("\\", "/");
-    execFileSync("tar", ["--force-local", "-xzf", tgz, "-C", dest], { stdio: "inherit" });
+    // GNU tar 会把 "D:/..." 当远程主机、bsdtar 不认 --force-local；
+    // 统一 chdir + 相对文件名（npm.tgz 与 cwd 同在 resDir），两种 tar 无歧义。
+    execFileSync("tar", ["-xzf", "npm.tgz"], { cwd: resDir, stdio: "inherit" });
+    // tar 解出 package/ 到 cwd，挪到 npm-cli-pkg 统一布局。
+    const { rename } = await import("node:fs/promises");
+    await rename(path.join(resDir, "package"), npmExtract).catch(() => {});
   }
   const npmCli = path.join(npmExtract, "package", "bin", "npm-cli.js");
 
@@ -160,9 +162,16 @@ if (dshChanged) {
 
 // 把 store 整树打成单个 tar.gz：安装包体积从 268MB 降到 ~48MB（压缩），
 // 且运行时首装是"解包一个归档"而非"拷贝几万小文件"——CI/慢盘上后者会超时。
+// 兼容性：GNU tar 会把 "D:\..." 当远程主机、System32 bsdtar 不认 --force-local，
+// 因此统一 chdir + 相对路径，两种 tar 都无歧义。
 const STORE_TAR = path.join(resDir, "dsh-store.tar.gz");
 console.log("打包 dsh-store.tar.gz…");
-execFileSync("tar", ["--force-local", "-czf", STORE_TAR.replaceAll("\\", "/"), "-C", storeDir.replaceAll("\\", "/"), "node_modules", "package.json", "package-lock.json"], { stdio: "inherit" });
+// 输出用 ../ 相对 cwd（storeDir）：产物落到 resDir（即 dsh-store 的上级）。
+execFileSync(
+  "tar",
+  ["-czf", "../dsh-store.tar.gz", "node_modules", "package.json", "package-lock.json"],
+  { cwd: storeDir, stdio: "inherit" }
+);
 const { size: tarSize } = await stat(STORE_TAR);
 console.log(`  dsh-store.tar.gz（${(tarSize / 1024 / 1024).toFixed(1)} MB）`);
 
