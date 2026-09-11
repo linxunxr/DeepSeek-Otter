@@ -99,16 +99,18 @@ async function buildDshStore() {
   await mkdir(storeDir, { recursive: true });
 
   // npm CLI 从已下载的 npm.tgz 解包获得（与运行时同源，不依赖系统 npm）。
+  // 就地解包：把 npm.tgz 复制进目标目录再解，避免跨目录 rename（Windows 上
+  // 目录 rename 易失败且不报错）。tar 兼容：文件名相对 cwd，无盘符歧义。
   const npmExtract = path.join(resDir, "npm-cli-pkg");
   if (!(await exists(path.join(npmExtract, "package", "bin", "npm-cli.js")))) {
     await rm(npmExtract, { recursive: true, force: true });
     await mkdir(npmExtract, { recursive: true });
-    // GNU tar 会把 "D:/..." 当远程主机、bsdtar 不认 --force-local；
-    // 统一 chdir + 相对文件名（npm.tgz 与 cwd 同在 resDir），两种 tar 无歧义。
-    execFileSync("tar", ["-xzf", "npm.tgz"], { cwd: resDir, stdio: "inherit" });
-    // tar 解出 package/ 到 cwd，挪到 npm-cli-pkg 统一布局。
-    const { rename } = await import("node:fs/promises");
-    await rename(path.join(resDir, "package"), npmExtract).catch(() => {});
+    await cp(NPM_DEST, path.join(npmExtract, "npm.tgz"));
+    execFileSync("tar", ["-xzf", "npm.tgz"], { cwd: npmExtract, stdio: "inherit" });
+    await rm(path.join(npmExtract, "npm.tgz"), { force: true });
+    if (!(await exists(path.join(npmExtract, "package", "bin", "npm-cli.js")))) {
+      throw new Error("npm.tgz 解包后缺少 package/bin/npm-cli.js");
+    }
   }
   const npmCli = path.join(npmExtract, "package", "bin", "npm-cli.js");
 
