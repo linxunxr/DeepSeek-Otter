@@ -152,8 +152,15 @@ if (dshChanged) {
 } else {
   const lock = JSON.parse(await readFile(STORE_LOCK, "utf8"));
   const installed = lock.packages?.["node_modules/@deepseek-ai/dsh"]?.version;
-  if (installed !== dshVersion) {
-    console.log(`store 里是 dsh@${installed}，upstream.json pin 是 ${dshVersion}，重建…`);
+  // lock 入库但 node_modules/tar.gz 被 gitignore：CI checkout 后只有 lock，
+  // 因此跳过条件必须连"树或归档实际存在"一起判断，否则打包阶段失败。
+  const treeExists =
+    (await exists(path.join(STORE_NM, "@deepseek-ai", "dsh", "package.json"))) ||
+    (await exists(path.join(resDir, "dsh-store.tar.gz")));
+  if (installed !== dshVersion || !treeExists) {
+    console.log(
+      `store 需要${installed !== dshVersion ? "升级" : "重建"}（lock=${installed}，pin=${dshVersion}，树存在=${treeExists}）…`,
+    );
     await buildDshStore();
   } else {
     console.log(`dsh store 已是 pin 版本（${dshVersion}），跳过`);
