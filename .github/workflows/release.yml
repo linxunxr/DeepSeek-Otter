@@ -104,10 +104,13 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
+      # Gitee 只是镜像：任何一步失败都不应让发版整体失败（GitHub 是权威源）。
       - name: Gitee 保底清单（GitHub-URL）
+        continue-on-error: true
         run: node scripts/sync-latest-to-gitee.mjs "src-tauri/target/release/bundle/nsis/latest.github.json"
 
       - name: 同步 Gitee 发行版附件
+        continue-on-error: true
         run: node scripts/sync-release-to-gitee.mjs "src-tauri/target/release/bundle/nsis" "v${{ steps.ver.outputs.version }}"
 
       - name: 校验 Gitee 附件齐全（不齐全则不升级清单）
