@@ -1,0 +1,7 @@
+{
+  "name": "gitee-sync",
+  "version": "1.0.0",
+  "description": "DeepSeek Otter 发版中转：GitHub Release → Gitee 附件 + 清单升级",
+  "main": "index.js",
+  "dependencies": {}
+}

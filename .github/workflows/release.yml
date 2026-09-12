@@ -104,23 +104,20 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      # Gitee 只是镜像：任何一步失败都不应让发版整体失败（GitHub 是权威源）。
+      # Gitee 只是镜像：失败不阻断发版（GitHub 是权威源）。
+      # 1) 先提交保底清单（GitHub-URL，小文件 runner 直传没问题）；
+      # 2) 大附件走云函数中转（境内可达 GitHub 的 Region 下载后传 Gitee），
+      #    云函数内部完成附件上传 + 清单升级为 Gitee-URL。
       - name: Gitee 保底清单（GitHub-URL）
         continue-on-error: true
         run: node scripts/sync-latest-to-gitee.mjs "src-tauri/target/release/bundle/nsis/latest.github.json"
 
-      - name: 同步 Gitee 发行版附件
+      - name: 云函数中转 Gitee（大附件 + 清单升级）
+        if: ${{ secrets.GITEE_SYNC_URL != '' }}
         continue-on-error: true
-        run: node scripts/sync-release-to-gitee.mjs "src-tauri/target/release/bundle/nsis" "v${{ steps.ver.outputs.version }}"
-
-      - name: 校验 Gitee 附件齐全（不齐全则不升级清单）
-        id: verify
-        continue-on-error: true
-        run: node scripts/verify-gitee-assets.mjs "v${{ steps.ver.outputs.version }}" "src-tauri/target/release/bundle/nsis"
-
-      - name: Gitee 升级清单（Gitee-URL，仅附件齐全时）
-        if: steps.verify.outcome == 'success'
-        run: node scripts/sync-latest-to-gitee.mjs "src-tauri/target/release/bundle/nsis/latest.gitee.json"
+        run: |
+          $resp = Invoke-WebRequest -Uri "${{ secrets.GITEE_SYNC_URL }}?secret=${{ secrets.GITEE_SYNC_SECRET }}&version=${{ steps.ver.outputs.version }}" -Method GET -TimeoutSec 1500 -UseBasicParsing
+          Write-Output $resp.Content
 
       - name: 发布摘要
         shell: bash
@@ -128,8 +125,8 @@ jobs:
           echo "## 发布摘要" >> "$GITHUB_STEP_SUMMARY"
           echo "- 版本：v${{ steps.ver.outputs.version }}" >> "$GITHUB_STEP_SUMMARY"
           echo "- GitHub Release：setup.exe + .sig + latest.json 已上传" >> "$GITHUB_STEP_SUMMARY"
-          if [ "${{ steps.verify.outcome }}" = "success" ]; then
-            echo "- Gitee：附件齐全，已升级为 Gitee-URL 清单（国内主源生效）" >> "$GITHUB_STEP_SUMMARY"
+          if [ -n "${{ secrets.GITEE_SYNC_URL }}" ]; then
+            echo "- Gitee：云函数中转已触发（结果见上一步输出；失败时 latest.json 保持 GitHub-URL 保底）" >> "$GITHUB_STEP_SUMMARY"
           else
-            echo "- Gitee：附件未齐全或缺令牌，latest.json 保持 GitHub-URL（保底可用）" >> "$GITHUB_STEP_SUMMARY"
+            echo "- Gitee：未配置 GITEE_SYNC_URL，仅保底清单（latest.json 指向 GitHub）" >> "$GITHUB_STEP_SUMMARY"
           fi
