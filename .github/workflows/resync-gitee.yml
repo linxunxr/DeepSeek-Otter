@@ -19,7 +19,7 @@ jobs:
       - name: 触发云函数中转 Gitee
         env:
           SYNC_URL: ${{ secrets.GITEE_SYNC_URL }}
-          SYNC_SECRET: ${{ secrets.GITEE_SYNC_SECRET }}
+          SYNC_SECRET: ${{ secrets.SYNC_SECRET }}
           VERSION: ${{ inputs.version }}
         run: |
           if [ -z "$SYNC_URL" ]; then

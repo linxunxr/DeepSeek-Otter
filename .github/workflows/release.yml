@@ -112,20 +112,30 @@ jobs:
         continue-on-error: true
         run: node scripts/sync-latest-to-gitee.mjs "src-tauri/target/release/bundle/nsis/latest.github.json"
 
+      # secret 名为 SYNC_SECRET（与云函数环境变量同名）；曾误写 GITEE_SYNC_SECRET
+      # 导致此步骤恒 403，被 continue-on-error 掩盖。
+      # secrets 不能进 step 级 if（dispatch 校验直接 422），统一经 env 传值、脚本内判空。
       - name: 云函数中转 Gitee（大附件 + 清单升级）
-        if: ${{ secrets.GITEE_SYNC_URL != '' }}
         continue-on-error: true
+        env:
+          SYNC_URL: ${{ secrets.GITEE_SYNC_URL }}
+          SYNC_SECRET: ${{ secrets.SYNC_SECRET }}
+          VERSION: ${{ steps.ver.outputs.version }}
+        shell: pwsh
         run: |
-          $resp = Invoke-WebRequest -Uri "${{ secrets.GITEE_SYNC_URL }}?secret=${{ secrets.GITEE_SYNC_SECRET }}&version=${{ steps.ver.outputs.version }}" -Method GET -TimeoutSec 1500 -UseBasicParsing
+          if (-not $env:SYNC_URL) { Write-Output "未配置 GITEE_SYNC_URL，跳过云函数中转"; exit 0 }
+          $resp = Invoke-WebRequest -Uri "${env:SYNC_URL}?secret=${env:SYNC_SECRET}&version=${env:VERSION}" -Method GET -TimeoutSec 1500 -UseBasicParsing
           Write-Output $resp.Content
 
       - name: 发布摘要
         shell: bash
+        env:
+          SYNC_URL: ${{ secrets.GITEE_SYNC_URL }}
         run: |
           echo "## 发布摘要" >> "$GITHUB_STEP_SUMMARY"
           echo "- 版本：v${{ steps.ver.outputs.version }}" >> "$GITHUB_STEP_SUMMARY"
           echo "- GitHub Release：setup.exe + .sig + latest.json 已上传" >> "$GITHUB_STEP_SUMMARY"
-          if [ -n "${{ secrets.GITEE_SYNC_URL }}" ]; then
+          if [ -n "$SYNC_URL" ]; then
             echo "- Gitee：云函数中转已触发（结果见上一步输出；失败时 latest.json 保持 GitHub-URL 保底）" >> "$GITHUB_STEP_SUMMARY"
           else
             echo "- Gitee：未配置 GITEE_SYNC_URL，仅保底清单（latest.json 指向 GitHub）" >> "$GITHUB_STEP_SUMMARY"
