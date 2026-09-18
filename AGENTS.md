@@ -34,9 +34,12 @@ pnpm build
 
 1. 升级 dsh：改 `upstream.json` 的 `dshVersion` → `node scripts/fetch-runtime.mjs` → 提交（lock 入库）。
 2. 改版本号（`package.json` + `src-tauri/tauri.conf.json` + `src-tauri/Cargo.toml` 三处一致）。
-3. 推 tag `v*` → CI 自动：fetch-runtime → 单测 → 签名构建 → 冒烟守门 → 上传 GitHub Release（setup.exe + .sig + latest.json）→ 同步 Gitee（先降级后升级：保底 GitHub-URL 清单 → 附件校验齐全 → 升级 Gitee-URL 清单）。
+3. 推 tag `v*` → CI 自动：fetch-runtime → 单测 → 签名构建 → 冒烟守门 → 上传 GitHub Release（setup.exe + .sig + latest.json）→ 同步 Gitee（保底 GitHub-URL 清单由 runner 直传 → 云函数中转大附件 + 升级 Gitee-URL 清单）。
+4. Gitee 侧异常（附件缺失/清单不对）单独补传：`gh workflow run resync-gitee.yml -f version=<版本号>`——免重跑全量发版，云函数自会从 GitHub Release 下载产物补齐 Gitee 并升级清单。
 
-**必需 Secrets**：`TAURI_SIGNING_PRIVATE_KEY`（updater 私钥内容，`~/.tauri/deepseek-otter.key`，空密码；**丢失即无法向存量用户推更新，需离线备份**）、`GITEE_TOKEN`（Gitee 私人令牌，projects 权限；缺省时 CI 自动跳过 Gitee，仅 GitHub 单源）。
+**必需 Secrets**：`TAURI_SIGNING_PRIVATE_KEY`（updater 私钥内容，`~/.tauri/deepseek-otter.key`，空密码；**丢失即无法向存量用户推更新，需离线备份**）、`GITEE_TOKEN`（Gitee 私人令牌，projects 权限；缺省时 CI 自动跳过 Gitee，仅 GitHub 单源）、`GITEE_SYNC_URL`（中转云函数 URL）+ `SYNC_SECRET`（触发口令，**必须与云函数同名环境变量的值一致**，两侧不一致 CI 恒 403 且被 continue-on-error 掩盖；建议纯字母数字规避 URL 编码问题）。
+
+**云函数中转**（代码在独立仓库 `github.com/linxunxr/Scf` 的 `gitee-sync/`，香港 Region 事件函数）：从 GitHub Release 下载 setup.exe/.sig → 建/查 Gitee 发行版 → attach_files 上传（幂等）→ latest.json 升级为 Gitee-URL。之所以中转：GitHub Actions runner 直传 51MB 到 Gitee 跨洲超时 0 字节。
 
 更新链路（客户端）：托盘"检查更新…" → 壳页面展示版本/进度 → 确认后 downloadAndInstall（Windows 安装时应用自动退出重装，重启后版本对齐机制自动处理 appData 的 dsh 重装）。双源 endpoint：Gitee raw `latest.json`（国内主）+ GitHub `releases/latest/download/latest.json`（兜底）；注意 **updater 只在拉清单阶段回退，下载 url 失败不回退**（灵鉴 v0.5.1 事故教训），故发布链路必须"先降级后升级"。
 
@@ -82,3 +85,5 @@ src-tauri/capabilities/   IPC 权限声明（仅授予壳本地页面，不授�
 - `pnpm tauri build` 需要有效图标（`src-tauri/icons/icon.ico`，当前是占位图标）。
 - Git Bash 里传 `/S /D=` 给 NSIS 安装器会被 MSYS 路径转换破坏参数，静默安装/卸载用 PowerShell `Start-Process -ArgumentList` 执行。
 - Git Bash 管道下 `taskkill` 输出与日志 `cat` 的中文乱码是编码问题，不影响功能（日志文件本身 UTF-8 正常）。
+- GitHub Actions step 级 `if` 里不能用 `secrets` 上下文（workflow_dispatch 校验直接 422）；统一经 `env:` 传值、脚本内判空。`curl -f` 会丢弃 4xx/5xx 响应体，排障时要拿 body 就别加 `-f`。
+- 腾讯云 SCF 控制台的 Cloud Studio 在线编辑器对程序化粘贴不可靠（Ctrl+A/V 会把内容追加而非替换，且工作区草稿与线上已部署代码会不一致）；改代码用"提交方法 → 本地上传 zip 包"最稳。SCF 运行时坑见 Scf 仓库 `gitee-sync/README.md`。
