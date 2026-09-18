@@ -3,6 +3,7 @@ name: Resync Gitee
 # 手动触发云函数中转：Gitee 侧附件缺失/清单异常时单独补传，不重跑全量发版。
 # 云函数自给自足（从 GitHub Release 下载产物 → 传 Gitee → 升级 latest.json），
 # 故本流程无需构建，仅一次 GET，耗时 ≈ 云函数执行时长（附件 51MB 约数分钟）。
+# 注意：secrets 不能进 step 级 if，统一经 env 传入、脚本内判空。
 on:
   workflow_dispatch:
     inputs:
@@ -16,13 +17,15 @@ jobs:
     timeout-minutes: 30
     steps:
       - name: 触发云函数中转 Gitee
-        if: ${{ secrets.GITEE_SYNC_URL != '' }}
+        env:
+          SYNC_URL: ${{ secrets.GITEE_SYNC_URL }}
+          SYNC_SECRET: ${{ secrets.GITEE_SYNC_SECRET }}
+          VERSION: ${{ inputs.version }}
         run: |
-          resp=$(curl -sf --max-time 1500 \
-            "${{ secrets.GITEE_SYNC_URL }}?secret=${{ secrets.GITEE_SYNC_SECRET }}&version=${{ inputs.version }}")
+          if [ -z "$SYNC_URL" ]; then
+            echo "::error::未配置 GITEE_SYNC_URL secret，无法触发云函数中转"
+            exit 1
+          fi
+          resp=$(curl -sf --max-time 1500 "${SYNC_URL}?secret=${SYNC_SECRET}&version=${VERSION}")
           echo "$resp"
           echo "$resp" | grep -q '"ok"' || { echo "::error::云函数返回异常，见上方输出"; exit 1; }
-
-      - name: 未配置提示
-        if: ${{ secrets.GITEE_SYNC_URL == '' }}
-        run: echo "::error::未配置 GITEE_SYNC_URL secret，无法触发云函数中转"; exit 1
