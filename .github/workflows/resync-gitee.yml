@@ -26,8 +26,9 @@ jobs:
             echo "::error::未配置 GITEE_SYNC_URL secret，无法触发云函数中转"
             exit 1
           fi
-          code=$(curl -s -o resp.txt -w "%{http_code}" --max-time 1500 \
-            "${SYNC_URL}?secret=${SYNC_SECRET}&version=${VERSION}")
+          # -G --data-urlencode：secret 含 +/&/空格等字符时直拼 URL 会被网关解码变形
+          code=$(curl -s -o resp.txt -w "%{http_code}" --max-time 1500 -G \
+            --data-urlencode "secret=${SYNC_SECRET}" --data-urlencode "version=${VERSION}" "${SYNC_URL}")
           echo "HTTP ${code}"
           cat resp.txt; echo
           grep -q '"ok"' resp.txt || { echo "::error::云函数返回异常（HTTP ${code}），见上方输出"; exit 1; }
