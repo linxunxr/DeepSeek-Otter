@@ -573,7 +573,7 @@ fn on_monitor_exit(app: &tauri::AppHandle, generation: u32, reason: &str) {
 // ---------------------------------------------------------------------------
 
 /// 数据目录下的 dsh 运行时根：<appData>/dsh-runtime。
-fn installed_dsh_dir(app: &tauri::AppHandle) -> PathBuf {
+pub(crate) fn installed_dsh_dir(app: &tauri::AppHandle) -> PathBuf {
     app.path()
         .app_data_dir()
         .expect("app data dir")
@@ -582,7 +582,7 @@ fn installed_dsh_dir(app: &tauri::AppHandle) -> PathBuf {
 
 /// 解析内置 node：打包形态在 exe 同级目录（Tauri externalBin 部署位置），
 /// dev/--no-bundle 形态在 src-tauri/binaries/（带 target triple 后缀）。
-fn resolve_node(app: &tauri::AppHandle) -> Option<PathBuf> {
+pub(crate) fn resolve_node(app: &tauri::AppHandle) -> Option<PathBuf> {
     let exe_name = if cfg!(windows) { "node.exe" } else { "node" };
     let triple_name = if cfg!(windows) {
         "node-x86_64-pc-windows-msvc.exe"
@@ -732,7 +732,7 @@ fn pinned_version_candidates(app: &tauri::AppHandle) -> Vec<std::path::PathBuf> 
 }
 
 /// 解析已安装 dsh 的入口 bin.js（安装布局见 install_dsh）。
-fn resolve_dsh_entry(_app: &tauri::AppHandle, runtime_dir: PathBuf) -> Option<PathBuf> {
+pub(crate) fn resolve_dsh_entry(_app: &tauri::AppHandle, runtime_dir: PathBuf) -> Option<PathBuf> {
     let entry = runtime_dir
         .join("install")
         .join("node_modules")

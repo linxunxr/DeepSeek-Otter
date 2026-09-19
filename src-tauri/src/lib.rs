@@ -12,6 +12,8 @@ use tauri::{
 mod backend;
 mod logging;
 mod models;
+mod plugins;
+mod skills;
 mod state;
 
 use state::OtterState;
@@ -180,7 +182,15 @@ pub fn run() {
             show_control_center,
             export_diagnostics,
             models::get_model_config,
-            models::set_model_config
+            models::set_model_config,
+            plugins::list_plugins,
+            plugins::install_plugin,
+            plugins::uninstall_plugin,
+            skills::list_skills,
+            skills::list_source_skills,
+            skills::import_skills,
+            skills::delete_skill,
+            skills::import_agents_md
         ])
         .setup(|app| {
             // 全局状态在 setup 里构造：需要 AppHandle 解析 appData（日志目录）。

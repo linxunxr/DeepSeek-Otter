@@ -285,6 +285,185 @@ function initModelsPage(): void {
 closeEditor(); // 初始关闭态
 initModelsPage();
 
+// ===================== 插件市场 =====================
+
+interface PluginInfo {
+  name: string;
+  version: string;
+}
+
+function renderPlugins(list: PluginInfo[]): void {
+  const box = el("plugin-list");
+  box.innerHTML = "";
+  if (!list.length) {
+    box.innerHTML = `<p style="font-size:12px;color:var(--muted);margin:6px 0">还没有安装任何插件。</p>`;
+    return;
+  }
+  list.forEach((p) => {
+    const item = document.createElement("div");
+    item.className = "provider-item";
+    item.innerHTML = `
+      <div class="p-main">
+        <div class="p-name">${p.name}</div>
+        <div class="p-meta">${p.version}</div>
+      </div>
+      <div class="p-ops"><button data-op="del" data-pkg="${p.name}">卸载</button></div>`;
+    box.appendChild(item);
+  });
+}
+
+function loadPlugins(): void {
+  void invoke<PluginInfo[]>("list_plugins")
+    .then(renderPlugins)
+    .catch((e) => (el("plugins-status").textContent = `读取失败：${e}`));
+}
+
+el("install-plugin").addEventListener("click", async () => {
+  const pkg = el<HTMLInputElement>("plugin-pkg").value.trim();
+  if (!pkg) return;
+  const btn = el<HTMLButtonElement>("install-plugin");
+  btn.disabled = true;
+  el("plugins-status").textContent = `正在安装 ${pkg}（联网执行 pnpm，请稍候）…`;
+  try {
+    await invoke("install_plugin", { package: pkg });
+    el<HTMLInputElement>("plugin-pkg").value = "";
+    el("plugins-status").textContent = `已安装 ${pkg}`;
+    loadPlugins();
+  } catch (e) {
+    el("plugins-status").textContent = `安装失败：${e}`;
+  } finally {
+    btn.disabled = false;
+  }
+});
+el("plugin-list").addEventListener("click", async (e) => {
+  const btn = (e.target as HTMLElement).closest<HTMLButtonElement>("button[data-op='del']");
+  if (!btn) return;
+  const pkg = btn.dataset.pkg ?? "";
+  btn.disabled = true;
+  el("plugins-status").textContent = `正在卸载 ${pkg}…`;
+  try {
+    await invoke("uninstall_plugin", { package: pkg });
+    el("plugins-status").textContent = `已卸载 ${pkg}`;
+    loadPlugins();
+  } catch (err) {
+    el("plugins-status").textContent = `卸载失败：${err}`;
+    btn.disabled = false;
+  }
+});
+loadPlugins();
+
+// ===================== Skill 与迁移 =====================
+
+interface SkillInfo {
+  name: string;
+  description: string;
+  kind: string;
+}
+
+function renderSkills(list: SkillInfo[]): void {
+  const box = el("skill-list");
+  box.innerHTML = "";
+  if (!list.length) {
+    box.innerHTML = `<p style="font-size:12px;color:var(--muted);margin:6px 0">还没有 Skill。点"从 Zcode 导入"或手动放入 ~/.dsh/skills。</p>`;
+    return;
+  }
+  list.forEach((s) => {
+    const item = document.createElement("div");
+    item.className = "provider-item";
+    const desc = s.description.length > 80 ? `${s.description.slice(0, 80)}…` : s.description;
+    item.innerHTML = `
+      <div class="p-main">
+        <div class="p-name">${s.name} <span style="font-weight:400;color:var(--muted);font-size:11px">${s.kind === "flat" ? "单文件" : "目录"}</span></div>
+        <div class="p-meta">${desc || "（无描述）"}</div>
+      </div>
+      <div class="p-ops"><button data-op="del" data-name="${s.name}">删除</button></div>`;
+    box.appendChild(item);
+  });
+}
+
+function loadSkills(): void {
+  void invoke<SkillInfo[]>("list_skills")
+    .then(renderSkills)
+    .catch((e) => (el("skills-status").textContent = `读取失败：${e}`));
+}
+
+el("skill-list").addEventListener("click", async (e) => {
+  const btn = (e.target as HTMLElement).closest<HTMLElement>("button[data-op='del']");
+  if (!btn) return;
+  const name = btn.dataset.name ?? "";
+  try {
+    await invoke("delete_skill", { name });
+    el("skills-status").textContent = `已删除 ${name}`;
+    loadSkills();
+  } catch (err) {
+    el("skills-status").textContent = `删除失败：${err}`;
+  }
+});
+
+// ZCode 导入选择器
+el("import-zcode-skills").addEventListener("click", () => {
+  void invoke<SkillInfo[]>("list_source_skills", { source: "zcode" })
+    .then((list) => {
+      const box = el("zcode-skill-list");
+      box.innerHTML = "";
+      if (!list.length) {
+        box.innerHTML = `<p style="font-size:12px;color:var(--muted)">未在 ~/.zcode/skills 发现 Skill（未装 Zcode 或没有 skill）。</p>`;
+      }
+      list.forEach((s) => {
+        const label = document.createElement("label");
+        label.className = "provider-item";
+        label.style.cursor = "pointer";
+        const desc = s.description.length > 70 ? `${s.description.slice(0, 70)}…` : s.description;
+        label.innerHTML = `
+          <input type="checkbox" value="${s.name}" checked style="flex-shrink:0" />
+          <div class="p-main">
+            <div class="p-name">${s.name}</div>
+            <div class="p-meta">${desc || "（无描述）"}</div>
+          </div>`;
+        box.appendChild(label);
+      });
+      el("zcode-importer").style.display = "block";
+    })
+    .catch((e) => (el("skills-status").textContent = `读取 Zcode skill 失败：${e}`));
+});
+el("cancel-import-skills").addEventListener("click", () => {
+  el("zcode-importer").style.display = "none";
+});
+el("do-import-skills").addEventListener("click", async () => {
+  const checked = [...el("zcode-skill-list").querySelectorAll<HTMLInputElement>("input:checked")].map(
+    (c) => c.value,
+  );
+  if (!checked.length) return;
+  el("skills-status").textContent = "导入中…";
+  try {
+    const [imported, skipped] = await invoke<[number, number]>("import_skills", {
+      source: "zcode",
+      names: checked,
+    });
+    el("skills-status").textContent = `导入完成：${imported} 个${skipped ? `，跳过已存在 ${skipped} 个` : ""}`;
+    el("zcode-importer").style.display = "none";
+    loadSkills();
+  } catch (e) {
+    el("skills-status").textContent = `导入失败：${e}`;
+  }
+});
+loadSkills();
+
+// 迁移工具
+el("migrate-agents").addEventListener("click", async () => {
+  el("migrate-status").textContent = "迁移中…";
+  try {
+    const msg = await invoke<string>("import_agents_md");
+    el("migrate-status").textContent = msg;
+  } catch (e) {
+    el("migrate-status").textContent = `失败：${e}`;
+  }
+});
+el("goto-skills-import").addEventListener("click", () => {
+  document.querySelector('button[data-page="skills"]')?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+  el("import-zcode-skills").click();
+});
+
 // 诊断导出（IPC 命令在 lib.rs）。
 document.getElementById("export-diag")?.addEventListener("click", async () => {
   const result = document.getElementById("diag-result");
