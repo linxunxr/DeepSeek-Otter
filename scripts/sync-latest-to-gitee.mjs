@@ -6,8 +6,10 @@
 //   更新：PUT  /repos/{owner}/{repo}/contents/{path}   ← 必须带现有文件的 sha
 //   content 一律 Base64。
 //
-// 用法: node scripts/sync-latest-to-gitee.mjs <manifest-file>
+// 用法: node scripts/sync-latest-to-gitee.mjs <manifest-file> [repo-path] [commit-message]
 //   先降级后升级：发布时先传 latest.github.json（保底），verify 通过后传 latest.gitee.json。
+//   repo-path/message 可选，供同步其他文件复用（如 README → Gitee 仓库副本）；
+//   缺省保持历史行为：仓库路径 latest.json、updater 文案。
 
 import { readFileSync } from "node:fs";
 import { exit } from "node:process";
@@ -16,7 +18,8 @@ const GITEE_API = "https://gitee.com/api/v5";
 const OWNER = process.env.GITEE_OWNER || "mwcxlinxun";
 const REPO = process.env.GITEE_REPO || "deep-seek-otter";
 const token = process.env.GITEE_TOKEN;
-const FILE_PATH = "latest.json";
+const FILE_PATH = process.argv[3] || "latest.json";
+const MESSAGE = process.argv[4] || "chore(updater): 更新 latest.json";
 
 const manifestFile = process.argv[2];
 if (!manifestFile || !token) {
@@ -58,12 +61,12 @@ let sha;
 }
 
 try {
-  if (sha) {
-    await gitee("PUT", { content, message: "chore(updater): 更新 latest.json", sha });
-    console.log("✓ latest.json 已更新（PUT）");
+    if (sha) {
+    await gitee("PUT", { content, message: MESSAGE, sha });
+    console.log(`✓ ${FILE_PATH} 已更新（PUT）`);
   } else {
-    await gitee("POST", { content, message: "chore(updater): 新增 latest.json" });
-    console.log("✓ latest.json 已创建（POST）");
+    await gitee("POST", { content, message: MESSAGE });
+    console.log(`✓ ${FILE_PATH} 已创建（POST）`);
   }
 } catch (e) {
   console.error(`✗ ${e.message}`);

@@ -1,0 +1,28 @@
+name: Sync Gitee README
+
+# README 变更自动同步到 Gitee 仓库（国内下载页用户看到的仓库说明就是它）。
+# 消除两仓 README 手动维护的漂移——Gitee 建仓副本曾长期停留旧版，
+# SmartScreen 安装说明加在 GitHub 侧而国内用户看不到（v0.1.2 发现）。
+on:
+  push:
+    branches: [main]
+    paths: ["README.md"]
+  workflow_dispatch:
+
+jobs:
+  readme:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: 推送 README 到 Gitee
+        env:
+          GITEE_TOKEN: ${{ secrets.GITEE_TOKEN }}
+        run: |
+          if [ -z "$GITEE_TOKEN" ]; then
+            echo "::error::未配置 GITEE_TOKEN secret"
+            exit 1
+          fi
+          node scripts/sync-latest-to-gitee.mjs README.md README.md "docs: 同步 README"
