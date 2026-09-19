@@ -47,12 +47,13 @@ pnpm build
 
 ```sh
 pnpm test              # 类型检查（tsc）+ Rust 单元测试（cargo test）
-pnpm smoke             # 冒烟：已有安装形态（要求先 tauri build --no-bundle）
-pnpm smoke:fresh       # 冒烟：首装形态（删 appData，含在线安装 dsh，全程约 1 分钟）
+pnpm smoke:build       # 构建冒烟专用 exe（identifier 加 .smoke 后缀，与运行中实例隔离）
+pnpm smoke             # 冒烟：已有安装形态（优先用 smoke exe）
+pnpm smoke:fresh       # 冒烟：首装形态（删 smoke 独立 appData，含 dsh 离线安装，全程约 1 分钟）
 ```
 
 - **单元测试**：`src-tauri/src/backend.rs` 的 `#[cfg(test)]` 模块，覆盖就绪行解析（`parse_ready_url`）与 upstream pin 解析（`parse_pinned_dsh_version`）等纯函数。新增可测逻辑优先抽纯函数再测。
-- **冒烟测试**：`scripts/smoke-test.mjs` 黑盒驱动 release exe，断言五步：应用启动 → dsh 后端拉起 → 回环端口 + 无 token 401（鉴权在位）→ 第二实例不破坏主实例（单实例锁）→ 退出后进程树终止且端口释放。改动生命周期/启动链/打包配置后必须跑。**跑前会自动停止已运行的 Otter 实例**（含 dsh 后端，进行中的会话会被中断）——单实例锁会让测试实例秒退、已开实例还会占住 appData 导致 --fresh 删除失败，这是冒烟的固有要求而非副作用。
+- **冒烟测试**：`scripts/smoke-test.mjs` 黑盒驱动 release exe，断言五步：应用启动 → dsh 后端拉起 → 回环端口 + 无 token 401（鉴权在位）→ 第二实例不破坏主实例（单实例锁）→ 退出后进程树终止且端口释放。改动生命周期/启动链/打包配置后必须跑。**与运行中实例隔离**：`pnpm smoke:build` 用 `tauri.smoke.conf.json`（identifier 加 `.smoke`）构建专用 exe，单实例锁与 appData 全独立，测试不动用户正在运行的 Otter——注意 `--config` 构建会覆盖 `target/release/deepseek-otter.exe`，所以产物复制为 `deepseek-otter-smoke.exe` 保存，要出正式产物需重新 `pnpm tauri build --no-bundle`。无 smoke exe 时回退正式 exe 并预检停止已运行实例（兜底路径，会中断进行中的会话）。
 - **CI**：`.github/workflows/ci.yml`（windows-latest）：检查 → 单测 → fetch-runtime → 构建 → fresh 冒烟。跑中国镜像源，可用 `MIRROR`/`NPM_REGISTRY` 环境变量覆盖。
 
 ## 代码结构

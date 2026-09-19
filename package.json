@@ -14,6 +14,7 @@
     "test:unit": "cd src-tauri && cargo test",
     "smoke": "node scripts/smoke-test.mjs",
     "smoke:fresh": "node scripts/smoke-test.mjs --fresh",
+    "smoke:build": "node scripts/build-smoke.mjs",
     "test": "pnpm typecheck && pnpm test:unit"
   },
   "devDependencies": {

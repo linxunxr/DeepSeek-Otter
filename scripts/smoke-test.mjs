@@ -13,17 +13,27 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 const root = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
-const exe = path.join(root, "src-tauri", "target", "release", "deepseek-otter.exe");
+const releaseDir = path.join(root, "src-tauri", "target", "release");
+// smoke 专用 exe 优先（pnpm smoke:build 产物，identifier 加 .smoke 后缀）：
+// 单实例锁与 appData 都和正式实例隔离，测试不动用户正在运行的 Otter。
+// 回退正式产物时锁冲突，预检会停掉已运行实例（兜底路径）。
+const smokeExe = path.join(releaseDir, "deepseek-otter-smoke.exe");
+const mainExe = path.join(releaseDir, "deepseek-otter.exe");
+const exe = existsSync(smokeExe) ? smokeExe : mainExe;
+const ISOLATED = exe === smokeExe;
 const appData = path.join(
   process.env.APPDATA || path.join(process.env.USERPROFILE || "", "AppData", "Roaming"),
-  "com.linxunxr.deepseek-otter"
+  ISOLATED ? "com.linxunxr.deepseek-otter.smoke" : "com.linxunxr.deepseek-otter"
 );
 
 const FRESH = process.argv.includes("--fresh");
 const TOTAL_TIMEOUT_MS = FRESH ? 5 * 60_000 : 120_000;
 
 if (!existsSync(exe)) {
-  fail(`找不到 ${exe}，先跑 pnpm tauri build --no-bundle`);
+  fail(`找不到 ${mainExe}，先跑 pnpm tauri build --no-bundle`);
+}
+if (!ISOLATED) {
+  console.warn("⚠ 未找到 deepseek-otter-smoke.exe（pnpm smoke:build 产物），回退正式 exe：预检将停止已运行的 Otter 实例。");
 }
 
 function fail(msg) {
@@ -146,8 +156,8 @@ async function main() {
   console.log(`exe: ${exe}`);
   console.log(`appData: ${appData}`);
 
-  await stopRunningOtters();
-
+  // 隔离 exe 的锁与 appData 均独立，无需动用户实例；正式 exe 才需要预检让路。
+  if (!ISOLATED) await stopRunningOtters();
   if (FRESH && existsSync(appData)) {
     console.log("--fresh：删除 appData 模拟首装");
     rmSync(appData, { recursive: true, force: true });
