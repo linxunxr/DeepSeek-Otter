@@ -92,8 +92,13 @@ const manifest = (url) => ({
   },
 });
 
-const githubUrl = `${GITHUB_BASE}/${encodeURIComponent(assetName)}`;
-const giteeUrl = `${GITEE_BASE}/${normalizedVersion}/${encodeURIComponent(assetName)}`;
+// GitHub 上传 Release asset 时会把文件名中的空格替换为点号（实测，v0.1.5 下载 404
+// 根因：本地 Tauri 产物是空格名，url 按本地名拼则与 asset 实际名错位）。
+// 两源 url 一律用转换后的名字（Gitee 附件经云函数上传，名源自 GitHub assets，同为点号）。
+const urlAssetName = assetName.replace(/ /g, ".");
+
+const githubUrl = `${GITHUB_BASE}/${encodeURIComponent(urlAssetName)}`;
+const giteeUrl = `${GITEE_BASE}/${normalizedVersion}/${encodeURIComponent(urlAssetName)}`;
 
 writeFileSync(
   join(distDir, "latest.github.json"),
