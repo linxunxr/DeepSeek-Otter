@@ -109,6 +109,42 @@
       .log:empty {
         display: none;
       }
+      /* 更新说明：notes 来自 CHANGELOG（CI 提取），按 h3/列表/加粗/行内码渲染 */
+      .update-notes {
+        max-width: min(560px, 80vw);
+        max-height: 240px;
+        overflow-y: auto;
+        text-align: left;
+        color: var(--muted);
+        font-size: 12px;
+        line-height: 1.6;
+        user-select: text;
+        background: #161a22;
+        border: 1px solid #232936;
+        border-radius: 8px;
+        padding: 10px 14px;
+      }
+      .update-notes h3 {
+        margin: 8px 0 4px;
+        font-size: 13px;
+        color: var(--fg);
+      }
+      .update-notes h3:first-child {
+        margin-top: 0;
+      }
+      .update-notes ul {
+        margin: 4px 0;
+        padding-left: 18px;
+      }
+      .update-notes li {
+        margin: 3px 0;
+      }
+      .update-notes code {
+        font-family: Consolas, monospace;
+        background: #232936;
+        border-radius: 3px;
+        padding: 1px 4px;
+      }
     </style>
   </head>
   <body>
@@ -125,7 +161,8 @@
       <pre class="log" id="log"></pre>
       <div id="update-panel" style="display: none; flex-direction: column; align-items: center; gap: 8px">
         <span id="update-status-text" style="color: var(--muted)"></span>
-        <div id="update-notes" style="display: none; max-width: min(560px, 80vw); color: var(--muted); font-size: 12px; white-space: pre-wrap; user-select: text"></div>
+        <div id="update-meta" style="display: none; font-size: 13px"></div>
+        <div id="update-notes" class="update-notes" style="display: none"></div>
         <div style="width: min(360px, 60vw); height: 6px; background: #232936; border-radius: 3px; overflow: hidden">
           <div id="update-progress" style="display: none; height: 100%; width: 0%; background: var(--accent)"></div>
         </div>

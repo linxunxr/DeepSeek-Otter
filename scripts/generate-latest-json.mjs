@@ -57,9 +57,32 @@ if (!assetName) {
   exit(1);
 }
 
+// notes 从仓库根 CHANGELOG.md 提取该版本段落（壳页面按 Markdown 渲染）；
+// 段落缺失时回退一行占位并告警——发版前必须先写 CHANGELOG。
+function extractNotes(bareVersion) {
+  let changelog;
+  try {
+    changelog = readFileSync(new URL("../CHANGELOG.md", import.meta.url), "utf-8");
+  } catch {
+    console.warn("⚠ CHANGELOG.md 不可读");
+    return null;
+  }
+  const title = new RegExp(`^## v${bareVersion.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}(?![.\\w])`);
+  const lines = changelog.split("\n");
+  const start = lines.findIndex((l) => title.test(l));
+  if (start === -1) {
+    console.warn(`⚠ CHANGELOG.md 缺少 v${bareVersion} 段落`);
+    return null;
+  }
+  // 段落到下一个版本标题（## 开头）或文件尾。
+  let end = lines.findIndex((l, i) => i > start && /^## /.test(l));
+  if (end === -1) end = lines.length;
+  return lines.slice(start + 1, end).join("\n").trim();
+}
+
 const manifest = (url) => ({
   version: bareVersion,
-  notes: `${normalizedVersion} 更新`,
+  notes: extractNotes(bareVersion) ?? `${normalizedVersion} 更新`,
   pub_date: new Date().toISOString(),
   platforms: {
     "windows-x86_64": {
