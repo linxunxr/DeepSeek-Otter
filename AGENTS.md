@@ -52,7 +52,7 @@ pnpm smoke:fresh       # 冒烟：首装形态（删 appData，含在线安装 d
 ```
 
 - **单元测试**：`src-tauri/src/backend.rs` 的 `#[cfg(test)]` 模块，覆盖就绪行解析（`parse_ready_url`）与 upstream pin 解析（`parse_pinned_dsh_version`）等纯函数。新增可测逻辑优先抽纯函数再测。
-- **冒烟测试**：`scripts/smoke-test.mjs` 黑盒驱动 release exe，断言五步：应用启动 → dsh 后端拉起 → 回环端口 + 无 token 401（鉴权在位）→ 第二实例不破坏主实例（单实例锁）→ 退出后进程树终止且端口释放。改动生命周期/启动链/打包配置后必须跑。
+- **冒烟测试**：`scripts/smoke-test.mjs` 黑盒驱动 release exe，断言五步：应用启动 → dsh 后端拉起 → 回环端口 + 无 token 401（鉴权在位）→ 第二实例不破坏主实例（单实例锁）→ 退出后进程树终止且端口释放。改动生命周期/启动链/打包配置后必须跑。**跑前会自动停止已运行的 Otter 实例**（含 dsh 后端，进行中的会话会被中断）——单实例锁会让测试实例秒退、已开实例还会占住 appData 导致 --fresh 删除失败，这是冒烟的固有要求而非副作用。
 - **CI**：`.github/workflows/ci.yml`（windows-latest）：检查 → 单测 → fetch-runtime → 构建 → fresh 冒烟。跑中国镜像源，可用 `MIRROR`/`NPM_REGISTRY` 环境变量覆盖。
 
 ## 代码结构

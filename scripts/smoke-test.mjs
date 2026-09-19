@@ -112,10 +112,41 @@ async function waitFor(desc, fn, { timeoutMs = 90_000, intervalMs = 2_000 } = {}
   }
 }
 
+/**
+ * 预检：停止已运行的 Otter 实例。
+ * 单实例锁（产品特性）会让测试实例启动即转交秒退，第一步"进程存活"必超时；
+ * 且已开实例占用 appData，--fresh 的 rmSync 会 EPERM。杀进程后句柄释放有延迟，
+ * 轮询等进程真正消失再继续（否则紧接的删除仍会偶发 EPERM）。
+ * 注意会连 dsh 后端一起终止——进行中的会话会被中断，日志明示。
+ */
+async function stopRunningOtters() {
+  const out = await ps(
+    `Get-Process -Name deepseek-otter -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Id`
+  );
+  const pids = out.trim().split(/\s+/).filter(Boolean).map(Number).filter(Number.isFinite);
+  if (pids.length === 0) return;
+  console.log(
+    `预检：检测到运行中的 Otter（pid ${pids.join(", ")}），已自动停止` +
+      `（单实例锁冲突；含 dsh 后端，进行中的会话会被中断——测试后请自行重新打开）`
+  );
+  for (const pid of pids) {
+    spawnSync("taskkill", ["/PID", String(pid), "/T", "/F"], { stdio: "ignore" });
+  }
+  for (let i = 0; i < 10; i++) {
+    await sleep(1000);
+    const left = await ps(
+      `Get-Process -Name deepseek-otter -ErrorAction SilentlyContinue | Measure-Object | Select-Object -ExpandProperty Count`
+    );
+    if (parseInt(left.trim(), 10) === 0) return;
+  }
+}
+
 async function main() {
   console.log(`== 冒烟测试（${FRESH ? "fresh 首装" : "已有安装"}）==`);
   console.log(`exe: ${exe}`);
   console.log(`appData: ${appData}`);
+
+  await stopRunningOtters();
 
   if (FRESH && existsSync(appData)) {
     console.log("--fresh：删除 appData 模拟首装");
