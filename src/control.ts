@@ -3,6 +3,7 @@
 
 import { getVersion } from "@tauri-apps/api/app";
 import { invoke } from "@tauri-apps/api/core";
+import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { initUpdaterUI, doCheck } from "./updater";
 
 // 版本徽标：顶栏 + 概览页当前版本。
@@ -179,6 +180,46 @@ const PROVIDER_TEMPLATES: { label: string; data: Partial<ProviderEntry> }[] = [
       name: "anthropic", displayName: "Anthropic", api: "anthropic",
       baseURL: "https://api.anthropic.com", apiKeyEnv: "ANTHROPIC_API_KEY",
       models: [{ id: "claude-sonnet-4-5", name: "", contextWindow: 200000 }],
+    },
+  },
+  {
+    label: "硅基流动（SiliconFlow）",
+    data: {
+      name: "siliconflow", displayName: "硅基流动", api: "openai-completions",
+      baseURL: "https://api.siliconflow.cn/v1", apiKeyEnv: "SILICONFLOW_API_KEY",
+      models: [],
+    },
+  },
+  {
+    label: "火山方舟（豆包）",
+    data: {
+      name: "volces-ark", displayName: "火山方舟（豆包）", api: "openai-completions",
+      baseURL: "https://ark.cn-beijing.volces.com/api/v3", apiKeyEnv: "ARK_API_KEY",
+      models: [],
+    },
+  },
+  {
+    label: "OpenRouter（聚合）",
+    data: {
+      name: "openrouter", displayName: "OpenRouter", api: "openai-completions",
+      baseURL: "https://openrouter.ai/api/v1", apiKeyEnv: "OPENROUTER_API_KEY",
+      models: [],
+    },
+  },
+  {
+    label: "Ollama（本地）",
+    data: {
+      name: "ollama", displayName: "Ollama（本地）", api: "openai-completions",
+      baseURL: "http://localhost:11434/v1", apiKeyEnv: "",
+      models: [],
+    },
+  },
+  {
+    label: "xAI（Grok）",
+    data: {
+      name: "xai", displayName: "xAI（Grok）", api: "openai-completions",
+      baseURL: "https://api.x.ai/v1", apiKeyEnv: "XAI_API_KEY",
+      models: [],
     },
   },
 ];
@@ -555,10 +596,31 @@ void invoke<string>("get_otter_settings")
     if (s.dshHome) el<HTMLInputElement>("dsh-home-input").value = s.dshHome;
   })
   .catch(() => {});
+// 会话归档导出
+el("migrate-sessions").addEventListener("click", async () => {
+  const btn = el<HTMLButtonElement>("migrate-sessions");
+  btn.disabled = true;
+  el("migrate-status").textContent = "正在读取 Zcode 会话库并导出（大库可能需要数十秒）…";
+  try {
+    const msg = await invoke<string>("migrate_zcode_sessions");
+    el("migrate-status").textContent = msg;
+  } catch (e) {
+    el("migrate-status").textContent = `失败：${e}`;
+  } finally {
+    btn.disabled = false;
+  }
+});
+
+// 数据目录：弹窗选择目标（只读输入框 + 浏览按钮），确认后迁移切换。
+el<HTMLInputElement>("dsh-home-input").addEventListener("click", () => el<HTMLButtonElement>("browse-home").click());
+el("browse-home").addEventListener("click", async () => {
+  const picked = await openDialog({ directory: true, title: "选择 dsh 数据目录" });
+  if (typeof picked === "string") el<HTMLInputElement>("dsh-home-input").value = picked;
+});
 el("migrate-home").addEventListener("click", async () => {
   const path = el<HTMLInputElement>("dsh-home-input").value.trim();
   if (!path) {
-    el("home-status").textContent = "请输入目标目录（如 D:\\dsh-data）";
+    el("home-status").textContent = "请先浏览选择目标目录";
     return;
   }
   const btn = el<HTMLButtonElement>("migrate-home");

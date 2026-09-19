@@ -12,6 +12,7 @@
     "core:window:default",
     "updater:default",
     "process:allow-restart",
-    "process:default"
+    "process:default",
+    "dialog:allow-open"
   ]
 }

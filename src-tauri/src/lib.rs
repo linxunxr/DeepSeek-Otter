@@ -13,6 +13,7 @@ mod backend;
 mod logging;
 mod models;
 mod plugins;
+mod sessions_archive;
 mod settings;
 mod skills;
 mod state;
@@ -176,6 +177,7 @@ pub fn run() {
         )
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_process::init())
+        .plugin(tauri_plugin_dialog::init())
         .invoke_handler(tauri::generate_handler![
             get_backend_status,
             restart_backend,
@@ -193,7 +195,8 @@ pub fn run() {
             skills::delete_skill,
             skills::import_agents_md,
             settings::get_otter_settings,
-            settings::migrate_dsh_home
+            settings::migrate_dsh_home,
+            sessions_archive::migrate_zcode_sessions
         ])
         .setup(|app| {
             // 全局状态在 setup 里构造：需要 AppHandle 解析 appData（日志目录）。
