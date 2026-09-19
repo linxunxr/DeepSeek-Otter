@@ -46,6 +46,10 @@ document.getElementById("retry")?.addEventListener("click", () => {
   void invoke("restart_backend");
 });
 
+document.getElementById("open-control")?.addEventListener("click", () => {
+  void invoke("show_control_center");
+});
+
 const diagBtn = document.getElementById("export-diag");
 diagBtn?.addEventListener("click", async () => {
   if (diagBtn instanceof HTMLButtonElement) {

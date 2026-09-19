@@ -25,6 +25,12 @@ fn restart_backend(app: tauri::AppHandle) {
     app.state::<OtterState>().backend.restart(&app);
 }
 
+/// 壳页面（加载页/诊断页）打开控制中心：入口按钮用。
+#[tauri::command]
+fn show_control_center(app: tauri::AppHandle) {
+    open_control_center(&app);
+}
+
 /// 导出诊断包：appData/diagnostics/otter-diag-<时间戳>.txt，
 /// 含壳版本、运行时版本、后端状态与近期日志。返回写入路径。
 #[tauri::command]
@@ -150,11 +156,19 @@ pub fn run() {
             // 第二实例：唤起已有窗口。
             show_main_window(app);
         }))
+        .plugin(
+            // 全局快捷键呼出控制中心：不依赖任何窗口焦点（dsh 前台也能呼出）。
+            // 快捷键在 setup 里动态注册（Builder 声明式注册在插件 initialize 阶段
+            // 失败会 panic 整个应用）；被其他应用占用时仅记日志降级，
+            // 托盘/按钮入口不受影响。
+            tauri_plugin_global_shortcut::Builder::new().build(),
+        )
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_process::init())
         .invoke_handler(tauri::generate_handler![
             get_backend_status,
             restart_backend,
+            show_control_center,
             export_diagnostics
         ])
         .setup(|app| {
@@ -189,6 +203,22 @@ pub fn run() {
             let handle = app.handle().clone();
             state_log_boot(&handle);
             handle.state::<OtterState>().backend.start(&handle);
+
+            // 注册全局快捷键（占用冲突时降级：仅日志，不影响托盘/按钮入口）。
+            {
+                use tauri_plugin_global_shortcut::{GlobalShortcutExt, ShortcutState};
+                if let Err(e) =
+                    app.global_shortcut().on_shortcut("ctrl+alt+o", |app, _shortcut, event| {
+                        if event.state == ShortcutState::Pressed {
+                            open_control_center(app);
+                        }
+                    })
+                {
+                    app.state::<OtterState>().log.log(&format!(
+                        "全局快捷键 Ctrl+Alt+O 注册失败（可能被其他应用占用）：{e}"
+                    ));
+                }
+            }
             Ok(())
         })
         .run(tauri::generate_context!())
