@@ -31,6 +31,13 @@ fn show_control_center(app: tauri::AppHandle) {
     open_control_center(&app);
 }
 
+/// 更新安装前停 dsh 后端：释放安装目录 node.exe 的文件锁
+/// （NSIS 写入被锁文件报 "Error opening file for writing"，v0.1.5 实证）。
+#[tauri::command]
+fn stop_backend(app: tauri::AppHandle) {
+    app.state::<OtterState>().backend.stop();
+}
+
 /// 导出诊断包：appData/diagnostics/otter-diag-<时间戳>.txt，
 /// 含壳版本、运行时版本、后端状态与近期日志。返回写入路径。
 #[tauri::command]
@@ -168,6 +175,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             get_backend_status,
             restart_backend,
+            stop_backend,
             show_control_center,
             export_diagnostics
         ])

@@ -1,10 +1,10 @@
 // 壳页面的更新检查与安装 UI：启动时自动静默检查（有新版才提示）+
 // 托盘"检查更新"手动触发。仅自动到"提示"为止，下载/安装由用户决定；
-// 安装前由 Rust 侧停掉 dsh 后端（Windows install 阶段应用会被退出）。
+// 安装前停掉 dsh 后端释放 node.exe 文件锁（Windows install 阶段应用会被退出）。
 
 import { check } from "@tauri-apps/plugin-updater";
-import { relaunch } from "@tauri-apps/plugin-process";
 import { getVersion } from "@tauri-apps/api/app";
+import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 
 interface UpdatePanel {
@@ -149,7 +149,7 @@ async function doInstall(): Promise<void> {
     }
     let total = 0;
     let downloaded = 0;
-    await update.downloadAndInstall((event) => {
+    await update.download((event) => {
       switch (event.event) {
         case "Started":
           total = event.data.contentLength ?? 0;
@@ -165,7 +165,11 @@ async function doInstall(): Promise<void> {
           break;
       }
     });
-    await relaunch();
+    // 安装前停 dsh 后端：NSIS 写入被运行中 node.exe 锁定的安装目录文件会报
+    // "Error opening file for writing"（v0.1.5 实证）；下载完成才停，下载期间 dsh 会话不受影响。
+    await invoke("stop_backend");
+    // Windows：install 启动安装器后自动退出应用，安装器装完默认自动重启（无需 relaunch）。
+    await update.install();
   } catch (e) {
     panel.status = "error";
     panel.error = typeof e === "string" ? e : String(e);
