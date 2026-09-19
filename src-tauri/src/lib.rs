@@ -237,28 +237,25 @@ fn setup_tray(app: &tauri::App) -> tauri::Result<()> {
     Ok(())
 }
 
-/// 打开控制中心窗口：已存在则前置，否则按壳页面 origin 拼 control.html 新建
-/// （dev 为 devUrl、打包为 tauri 协议，与主窗口同源，capability 已放行）。
+/// 打开控制中心窗口：已存在则前置，否则新建（WebviewUrl::App 按路径加载，
+/// dev 解析到 devUrl、prod 解析到 tauri 虚拟域，勿手拼 External URL——
+/// prod 下 tauri.localhost 的手拼绝对地址加载白屏，v0.1.3 实证）。
 fn open_control_center(app: &tauri::AppHandle) {
     if let Some(win) = app.get_webview_window("control") {
         let _ = win.show();
         let _ = win.set_focus();
         return;
     }
-    let Some(shell) = app.state::<OtterState>().shell_url() else { return };
-    let origin = match shell.port() {
-        Some(p) => format!("{}://{}:{p}", shell.scheme(), shell.host_str().unwrap_or("tauri.localhost")),
-        None => format!("{}://{}", shell.scheme(), shell.host_str().unwrap_or("tauri.localhost")),
-    };
-    let url: tauri::Url = format!("{origin}/control.html")
-        .parse()
-        .expect("控制中心 URL 合法");
-    let _ = tauri::WebviewWindowBuilder::new(app, "control", tauri::WebviewUrl::External(url))
-        .title("Otter 控制中心")
-        .inner_size(780.0, 560.0)
-        .min_inner_size(640.0, 480.0)
-        .center()
-        .build();
+    let _ = tauri::WebviewWindowBuilder::new(
+        app,
+        "control",
+        tauri::WebviewUrl::App("control.html".into()),
+    )
+    .title("Otter 控制中心")
+    .inner_size(780.0, 560.0)
+    .min_inner_size(640.0, 480.0)
+    .center()
+    .build();
 }
 
 /// 驻留期更新轮询间隔：24 小时。首轮等满一个间隔（启动检查已由壳页面做过）。
