@@ -46,6 +46,7 @@ interface ProviderEntry {
   displayName: string;
   api: string;
   baseURL: string;
+  apiKey?: string;
   apiKeyEnv: string;
   models: ModelEntry[];
 }
@@ -78,10 +79,11 @@ function renderProviders(): void {
     const item = document.createElement("div");
     item.className = "provider-item";
     const models = p.models.map((m) => m.id).join("、") || "（未配置模型）";
+    const keyBadge = p.apiKey ? " · 🔑已存 Key" : "";
     item.innerHTML = `
       <div class="p-main">
         <div class="p-name">${p.displayName || p.name}</div>
-        <div class="p-meta">${p.api} · ${p.baseURL || "（无 baseURL）"} · 模型：${models}</div>
+        <div class="p-meta">${p.api} · ${p.baseURL || "（无 baseURL）"} · 模型：${models}${keyBadge}</div>
       </div>
       <div class="p-ops">
         <button data-op="edit" data-i="${i}">编辑</button>
@@ -268,6 +270,7 @@ function openEditor(index: number): void {
   el<HTMLInputElement>("f-display").value = p?.displayName ?? "";
   el<HTMLSelectElement>("f-api").value = p?.api ?? "openai-completions";
   el<HTMLInputElement>("f-base").value = p?.baseURL ?? "";
+  el<HTMLInputElement>("f-apikey").value = p?.apiKey ?? "";
   el<HTMLInputElement>("f-keyenv").value = p?.apiKeyEnv ?? "";
   renderModelRows(p?.models ?? []);
   el("editor-error").textContent = "";
@@ -302,6 +305,7 @@ function initModelsPage(): void {
     el<HTMLInputElement>("f-display").value = d.displayName ?? "";
     el<HTMLSelectElement>("f-api").value = d.api ?? "openai-completions";
     el<HTMLInputElement>("f-base").value = d.baseURL ?? "";
+    el<HTMLInputElement>("f-apikey").value = ""; // 模板不带 key
     el<HTMLInputElement>("f-keyenv").value = d.apiKeyEnv ?? "";
     renderModelRows(
       (d.models ?? []).map((m) => ({
@@ -340,12 +344,19 @@ function initModelsPage(): void {
       el("editor-error").textContent = `路由名 ${name} 已存在`;
       return;
     }
+    const apiKey = el<HTMLInputElement>("f-apikey").value.trim();
+    const apiKeyEnv = el<HTMLInputElement>("f-keyenv").value.trim();
+    if (apiKey && apiKeyEnv) {
+      el("editor-error").textContent = "API Key 与 API Key 环境变量只能填其一";
+      return;
+    }
     const entry: ProviderEntry = {
       name,
       displayName: el<HTMLInputElement>("f-display").value.trim(),
       api: el<HTMLSelectElement>("f-api").value,
       baseURL: el<HTMLInputElement>("f-base").value.trim(),
-      apiKeyEnv: el<HTMLInputElement>("f-keyenv").value.trim(),
+      ...(apiKey ? { apiKey } : {}),
+      apiKeyEnv,
       models,
     };
     if (editingIndex >= 0) modelConfig.providers[editingIndex] = entry;

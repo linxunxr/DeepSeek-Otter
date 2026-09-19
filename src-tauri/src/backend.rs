@@ -368,6 +368,10 @@ impl Backend {
         // 控制中心"模型与供应商"的独立 patch 层（不碰用户手写的 cordis.patch.yml）。
         // 每次 spawn 前以 JSON 源重派生，杜绝两文件漂移（详见 models::ensure_patch）。
         let patch = crate::models::ensure_patch(app);
+        // 直填 key 的供应商：key 本体只经进程环境注入（patch 里仅有派生变量名）。
+        for (name, value) in crate::models::env_bindings(app) {
+            cmd.env(name, value);
+        }
         cmd.args(dsh_args(patch.as_deref()))
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())

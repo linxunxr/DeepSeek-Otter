@@ -79,6 +79,33 @@ fn sync_patch_files(json: &std::path::Path, patch: &std::path::Path) -> Result<b
     result
 }
 
+/// spawn 时给 dsh 子进程注入的环境变量绑定：直填 key 的供应商 →
+/// （派生环境变量名, key 本体）。key 只经进程环境传递，不落任何配置文件。
+/// JSON 读不了/解析失败时返回空（ensure_patch 已记过日志并降级，这里不再报）。
+pub fn env_bindings(app: &tauri::AppHandle) -> Vec<(String, String)> {
+    let Some(json) = config_path(app).and_then(|p| std::fs::read_to_string(p).ok()) else {
+        return Vec::new();
+    };
+    env_bindings_from_json(&json).unwrap_or_default()
+}
+
+/// 纯解析（可测）：providers[].apiKey 非空 → (derived_env_name, apiKey)。
+fn env_bindings_from_json(text: &str) -> Result<Vec<(String, String)>, String> {
+    let value: Value = serde_json::from_str(text).map_err(|e| format!("配置 JSON 非法：{e}"))?;
+    let providers = value
+        .get("providers")
+        .and_then(|p| p.as_array())
+        .ok_or("缺少 providers 数组")?;
+    Ok(providers
+        .iter()
+        .filter_map(|p| {
+            let route = p.get("name")?.as_str()?;
+            let key = p.get("apiKey").and_then(|s| s.as_str())?;
+            (!key.is_empty()).then(|| (derived_env_name(route), key.to_string()))
+        })
+        .collect())
+}
+
 /// YAML 双引号转义（拼接安全：注入字符全部落在引号字符串内）。
 fn yq(s: &str) -> String {
     format!("\"{}\"", s.replace('\\', "\\\\").replace('"', "\\\"").replace('\n', "\\n"))
@@ -99,6 +126,13 @@ fn valid_env_name(s: &str) -> bool {
         && chars.all(|c| c.is_ascii_alphanumeric() || c == '_')
 }
 
+/// 直填 key 的派生环境变量名：路由名受限 [A-Za-z0-9_-]，大写并把 `-` 转 `_`
+/// 后必满足环境变量名语法；前缀隔离出 Otter 命名空间。同名碰撞（`a-b` vs
+/// `a_b`）由 render_patch_yaml 统一检测报错。
+fn derived_env_name(route: &str) -> String {
+    format!("OTTER_KEY_{}", route.to_uppercase().replace('-', "_"))
+}
+
 /// 按 dsh patch entry 语法渲染（providers 非空才有 llm-pi-ai 条目；
 /// 默认模型选了才写 agent-default-model 条目）。
 fn render_patch_yaml(v: &Value) -> Result<String, String> {
@@ -111,6 +145,9 @@ fn render_patch_yaml(v: &Value) -> Result<String, String> {
         .ok_or("缺少 providers 数组")?;
     if !providers.is_empty() {
         out.push_str("- id: llm-pi-ai\n  config:\n    providers:\n");
+        // patch 里只允许出现环境变量名（含派生名），key 本体绝不落进配置文件——
+        // 派生名跨供应商去重，同名（如 my-gw 与 my_gw）直接报错。
+        let mut used_env_names: Vec<String> = Vec::new();
         for p in providers {
             let route = p
                 .get("name")
@@ -135,18 +172,46 @@ fn render_patch_yaml(v: &Value) -> Result<String, String> {
                     out.push_str(&format!("        baseURL: {}\n", yq(base)));
                 }
             }
-            if let Some(env) = p.get("apiKeyEnv").and_then(|s| s.as_str()) {
-                if !env.is_empty() {
+            let inline_key = p
+                .get("apiKey")
+                .and_then(|s| s.as_str())
+                .is_some_and(|s| !s.is_empty());
+            let env_name = if inline_key {
+                // 直填 key：patch 只写派生名，值由 spawn 时注入环境变量。
+                if p
+                    .get("apiKeyEnv")
+                    .and_then(|s| s.as_str())
+                    .is_some_and(|s| !s.is_empty())
+                {
+                    return Err(format!(
+                        "供应商 {route} 的 API Key 与 API Key 环境变量只能填其一"
+                    ));
+                }
+                Some(derived_env_name(route))
+            } else if let Some(env) = p.get("apiKeyEnv").and_then(|s| s.as_str()) {
+                if env.is_empty() {
+                    None
+                } else {
                     // 保存时即拦截：坏值（如 key 本体、含连字符）会让 dsh 整个
                     // boot 失败，静默丢字段则配置看似生效实则没用，两者都不能要。
                     if !valid_env_name(env) {
                         return Err(format!(
                             "供应商 {route} 的 apiKeyEnv 要填环境变量名（字母/数字/下划线、\
-                             不以数字开头，如 MY_GATEWAY_API_KEY），不能直接填 key 本体"
+                             不以数字开头，如 MY_GATEWAY_API_KEY），不能直接填 key 本体；\
+                             想直接用 key 请填「API Key」一栏"
                         ));
                     }
-                    out.push_str(&format!("        apiKeyEnv: {env}\n"));
+                    Some(env.to_string())
                 }
+            } else {
+                None
+            };
+            if let Some(env) = env_name {
+                if used_env_names.contains(&env) {
+                    return Err(format!("环境变量名 {env} 被多个供应商占用，请改用环境变量名区分"));
+                }
+                used_env_names.push(env.clone());
+                out.push_str(&format!("        apiKeyEnv: {env}\n"));
             }
             if let Some(models) = p.get("models").and_then(|m| m.as_array()) {
                 if !models.is_empty() {
@@ -282,5 +347,54 @@ mod tests {
         assert!(!patch.exists(), "孤儿 patch 未清理");
 
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// 直填 key：patch 只落派生变量名，key 本体绝不进配置；两种来源互斥；
+    /// 派生名碰撞（my-gw 与 my_gw 同名）必须报错。
+    #[test]
+    fn inline_api_key_derives_env_name() {
+        assert_eq!(derived_env_name("my-gw"), "OTTER_KEY_MY_GW");
+        assert_eq!(derived_env_name("omni1"), "OTTER_KEY_OMNI1");
+
+        let cfg = serde_json::json!({
+            "providers": [{
+                "name": "my-gw", "api": "openai-completions",
+                "baseURL": "https://gw.example/v1",
+                "apiKey": "sk-SECRET-VALUE"
+            }]
+        });
+        let y = render_patch_yaml(&cfg).unwrap();
+        assert!(y.contains("apiKeyEnv: OTTER_KEY_MY_GW"), "派生名缺失：{y}");
+        assert!(!y.contains("sk-SECRET-VALUE"), "key 本体泄漏进 patch：{y}");
+
+        // 直填 key 与环境变量名同时填 → 报错。
+        let both = serde_json::json!({
+            "providers": [{ "name": "gw", "apiKey": "sk-x", "apiKeyEnv": "GW_KEY" }]
+        });
+        let err = render_patch_yaml(&both).unwrap_err();
+        assert!(err.contains("只能填其一"), "互斥报错：{err}");
+
+        // 派生名碰撞：my-gw 与 my_gw 都派生 OTTER_KEY_MY_GW。
+        let clash = serde_json::json!({
+            "providers": [
+                { "name": "my-gw", "apiKey": "sk-a" },
+                { "name": "my_gw", "apiKey": "sk-b" }
+            ]
+        });
+        let err = render_patch_yaml(&clash).unwrap_err();
+        assert!(err.contains("被多个供应商占用"), "碰撞报错：{err}");
+    }
+
+    /// spawn 注入绑定：只取 apiKey 非空的供应商；空 key / 无 key 跳过。
+    #[test]
+    fn env_bindings_from_json_filters_inline_keys() {
+        let cfg = r#"{"providers":[
+            {"name":"a-gw","apiKey":"sk-a"},
+            {"name":"b-gw","apiKey":""},
+            {"name":"c-gw","apiKeyEnv":"C_KEY"}
+        ]}"#;
+        let bindings = env_bindings_from_json(cfg).unwrap();
+        assert_eq!(bindings, vec![("OTTER_KEY_A_GW".to_string(), "sk-a".to_string())]);
+        assert!(env_bindings_from_json("not json").is_err());
     }
 }
