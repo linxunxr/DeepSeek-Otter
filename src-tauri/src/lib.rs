@@ -125,6 +125,15 @@ pub fn navigate_to_backend(app: &tauri::AppHandle, url: &str) {
     }
 }
 
+/// 回壳页面（加载/诊断页）。终局失败或驻留恢复时由后端状态机调用：窗口停在
+/// 已死的 dsh URL 上只会无限"自动重连中"，回壳页面才能展示错误与重试入口。
+pub fn navigate_to_shell(app: &tauri::AppHandle) {
+    let shell_url = app.state::<OtterState>().shell_url();
+    if let (Some(window), Some(shell_url)) = (app.get_webview_window("main"), shell_url) {
+        let _ = window.navigate(shell_url);
+    }
+}
+
 /// 显示主窗口并确保后端在跑（托盘点开/第二实例唤起共用）。
 fn show_main_window(app: &tauri::AppHandle) {
     if let Some(window) = app.get_webview_window("main") {
@@ -142,9 +151,7 @@ fn show_main_window(app: &tauri::AppHandle) {
             }
             backend::BackendState::Stopped | backend::BackendState::Failed => {
                 // 驻留后被停掉/失败：回壳页面并重启后端。
-                if let Some(shell_url) = state.shell_url() {
-                    let _ = window.navigate(shell_url);
-                }
+                navigate_to_shell(app);
                 state.backend.start(app);
             }
             backend::BackendState::Installing | backend::BackendState::Starting => {}

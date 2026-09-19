@@ -63,6 +63,9 @@ struct BackendInner {
     log: std::collections::VecDeque<String>,
     child: Option<Child>,
     installer: Option<Child>,
+    /// 当前这轮启动意图下的连续自动重启计数。start() 不清零——自动重试路径复用
+    /// start，在那里复位会让 MAX_AUTO_RESTARTS 永远达不到（v0.1.9 曾因此无限地
+    /// 每 2 秒重试）；仅在显式 stop/restart 或成功就绪时归零。
     restarts: u32,
     /// 已就绪过的 dsh 入口路径（安装产物），跨 start/stop 复用避免重复探测。
     dsh_entry: Option<PathBuf>,
@@ -119,7 +122,6 @@ impl Backend {
             inner.state = BackendState::Starting;
             inner.url = None;
             inner.message = None;
-            inner.restarts = 0;
         }
         let generation = self.generation.fetch_add(1, Ordering::SeqCst) + 1;
         emit_status(app);
@@ -364,12 +366,8 @@ impl Backend {
             }
         }
         // 控制中心"模型与供应商"页生成的独立 patch 层（不碰用户手写的 cordis.patch.yml）。
-        if let Some(patch) = crate::models::patch_path(app) {
-            if patch.exists() {
-                cmd.args(["--patch"]).arg(&patch);
-            }
-        }
-        cmd.args(["web", "--no-open", "--port", "0"])
+        let patch = crate::models::patch_path(app).filter(|p| p.exists());
+        cmd.args(dsh_args(patch.as_deref()))
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .stdin(Stdio::null());
@@ -393,7 +391,8 @@ impl Backend {
         }
     }
 
-    /// 停止后端：终止进程树 → 置 Stopped。供关窗驻留与退出使用。
+    /// 停止后端：终止进程树 → 置 Stopped。供关窗驻留与退出使用；
+    /// 显式停止代表新一轮启动意图，连续重启计数归零。
     pub fn stop(&self) {
         self.generation.fetch_add(1, Ordering::SeqCst);
         let mut inner = self.inner.lock().unwrap();
@@ -408,6 +407,7 @@ impl Backend {
         inner.state = BackendState::Stopped;
         inner.url = None;
         inner.message = None;
+        inner.restarts = 0;
     }
 
     /// 用户显式重试（诊断页按钮）。
@@ -429,6 +429,21 @@ impl Backend {
     fn is_current(&self, generation: u32) -> bool {
         self.generation.load(Ordering::SeqCst) == generation
     }
+}
+
+/// dsh 启动参数。`web` 是子命令，`--patch` 必须跟在它后面：dsh 的参数解析拒绝
+/// 出现在子命令之前的父级 flag（"web takes none of parent --patch…"），顺序拼反
+/// dsh 会立即退出（v0.1.9 曾因此每 2 秒崩溃重试、页面无限"自动重连中"）。
+fn dsh_args(patch: Option<&Path>) -> Vec<std::ffi::OsString> {
+    let mut args: Vec<std::ffi::OsString> = vec!["web".into()];
+    if let Some(p) = patch {
+        args.push("--patch".into());
+        args.push(p.into());
+    }
+    args.push("--no-open".into());
+    args.push("--port".into());
+    args.push("0".into());
+    args
 }
 
 /// 把当前状态广播给壳页面（backend-status 事件）。
@@ -467,6 +482,8 @@ fn spawn_stdout_monitor(
                             inner.state = BackendState::Running;
                             inner.url = Some(url.clone());
                             inner.message = None;
+                            // 成功就绪即本轮健康：连续重启计数归零。
+                            inner.restarts = 0;
                             drop(inner);
                             emit_status(&app);
                             crate::navigate_to_backend(&app, &url);
@@ -557,6 +574,9 @@ fn on_monitor_exit(app: &tauri::AppHandle, generation: u32, reason: &str) {
             ));
             drop(inner);
             emit_status(app);
+            // 终局失败：主窗口可能还停在旧 URL 的 dsh 页面上对着死端口无限
+            // "自动重连中"，导航回壳页面让用户看到失败原因。
+            crate::navigate_to_shell(app);
             return;
         }
         inner.restarts += 1;
@@ -809,6 +829,29 @@ fn kill_pid_tree(pid: u32) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// 启动参数顺序：`--patch` 必须在 `web` 子命令之后（dsh 拒绝子命令前的
+    /// 父级 flag，v0.1.9 的无限崩溃重试即顺序拼反所致）。
+    #[test]
+    fn dsh_args_patch_follows_web_subcommand() {
+        let to_str = |args: &Vec<std::ffi::OsString>| -> Vec<String> {
+            args.iter().map(|a| a.to_string_lossy().into_owned()).collect()
+        };
+        let with_patch = to_str(&dsh_args(Some(Path::new("C:/app data/otter-models.patch.yml"))));
+        let web_at = with_patch.iter().position(|a| a == "web").expect("缺 web 子命令");
+        let patch_at = with_patch
+            .iter()
+            .position(|a| a == "--patch")
+            .expect("缺 --patch");
+        assert!(patch_at > web_at, "顺序拼反：{with_patch:?}");
+        assert_eq!(with_patch[patch_at + 1], "C:/app data/otter-models.patch.yml");
+        assert_eq!(with_patch[0], "web");
+        // 无 patch 时（未配置供应商）只剩 web 固定参数。
+        assert_eq!(
+            to_str(&dsh_args(None)),
+            vec!["web", "--no-open", "--port", "0"]
+        );
+    }
 
     /// 就绪行解析：标准格式（实测 dsh 0.1.2-rc.1 输出）。
     #[test]

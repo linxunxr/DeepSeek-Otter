@@ -54,6 +54,15 @@ fn valid_route_name(s: &str) -> bool {
     !s.is_empty() && s.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
 }
 
+/// 校验 apiKeyEnv：dsh 的 credential 引用要求环境变量名格式
+/// `/^[A-Za-z_][A-Za-z0-9_]*$/`（连字符/数字开头都会让整个 boot 失败——
+/// v0.1.9 曾因用户把 key 本体填进该字段而启动即崩）。
+fn valid_env_name(s: &str) -> bool {
+    let mut chars = s.chars();
+    matches!(chars.next(), Some(c) if c.is_ascii_alphabetic() || c == '_')
+        && chars.all(|c| c.is_ascii_alphanumeric() || c == '_')
+}
+
 /// 按 dsh patch entry 语法渲染（providers 非空才有 llm-pi-ai 条目；
 /// 默认模型选了才写 agent-default-model 条目）。
 fn render_patch_yaml(v: &Value) -> Result<String, String> {
@@ -91,7 +100,15 @@ fn render_patch_yaml(v: &Value) -> Result<String, String> {
                 }
             }
             if let Some(env) = p.get("apiKeyEnv").and_then(|s| s.as_str()) {
-                if !env.is_empty() && valid_route_name(env) {
+                if !env.is_empty() {
+                    // 保存时即拦截：坏值（如 key 本体、含连字符）会让 dsh 整个
+                    // boot 失败，静默丢字段则配置看似生效实则没用，两者都不能要。
+                    if !valid_env_name(env) {
+                        return Err(format!(
+                            "供应商 {route} 的 apiKeyEnv 要填环境变量名（字母/数字/下划线、\
+                             不以数字开头，如 MY_GATEWAY_API_KEY），不能直接填 key 本体"
+                        ));
+                    }
                     out.push_str(&format!("        apiKeyEnv: {env}\n"));
                 }
             }
@@ -176,5 +193,30 @@ mod tests {
     #[test]
     fn yaml_quote_escapes() {
         assert_eq!(yq("a\"b\\c\nd"), "\"a\\\"b\\\\c\\nd\"");
+    }
+
+    /// apiKeyEnv 按环境变量名格式校验：key 本体（sk-… 含连字符）、数字开头等
+    /// 会让 dsh boot 失败的值必须在保存时拦截，空值（可选字段）放行。
+    #[test]
+    fn rejects_bad_api_key_env() {
+        for bad in [
+            "sk-bcf076969a072461-1430b9", // key 本体（连字符）
+            "1ABC",                       // 数字开头
+            "A-B",                        // 连字符
+            "MY KEY",                     // 空格
+        ] {
+            let cfg = serde_json::json!({
+                "providers": [{ "name": "gw", "apiKeyEnv": bad }]
+            });
+            let err = render_patch_yaml(&cfg).unwrap_err();
+            assert!(err.contains("环境变量名"), "报错文案：{err}");
+        }
+        let ok = serde_json::json!({
+            "providers": [{ "name": "gw", "apiKeyEnv": "OMNIROUTE_API_KEY" }]
+        });
+        assert!(render_patch_yaml(&ok).unwrap().contains("apiKeyEnv: OMNIROUTE_API_KEY"));
+        // 可选字段：空值直接省略，不产出该行。
+        let none = serde_json::json!({ "providers": [{ "name": "gw" }] });
+        assert!(!render_patch_yaml(&none).unwrap().contains("apiKeyEnv"));
     }
 }
