@@ -10,7 +10,7 @@
 use serde::Serialize;
 use std::path::{Path, PathBuf};
 
-use crate::plugins::dsh_home;
+use crate::settings::dsh_home;
 
 #[derive(Serialize, Clone)]
 pub struct SkillInfo {
@@ -20,8 +20,8 @@ pub struct SkillInfo {
     pub kind: String,
 }
 
-fn skills_root() -> PathBuf {
-    dsh_home().join("skills")
+fn skills_root(app: &tauri::AppHandle) -> PathBuf {
+    dsh_home(app).join("skills")
 }
 
 /// 解析 SKILL.md 的 YAML frontmatter（只需 name/description 两行，线性提取足够；
@@ -90,13 +90,13 @@ fn scan_root(root: &Path) -> Vec<SkillInfo> {
 }
 
 #[tauri::command]
-pub fn list_skills() -> Vec<SkillInfo> {
-    scan_root(&skills_root())
+pub fn list_skills(app: tauri::AppHandle) -> Vec<SkillInfo> {
+    scan_root(&skills_root(&app))
 }
 
 /// 扫描迁移源（如 ~/.zcode/skills）；源根不存在返回空列表而非报错（未装 ZCode 正常）。
 #[tauri::command]
-pub fn list_source_skills(source: String) -> Vec<SkillInfo> {
+pub fn list_source_skills(app: tauri::AppHandle, source: String) -> Vec<SkillInfo> {
     let root = if source == "zcode" {
         PathBuf::from(std::env::var("USERPROFILE").unwrap_or_default())
             .join(".zcode")
@@ -142,7 +142,7 @@ fn copy_dir_recursive(src: &Path, dest: &Path) -> std::io::Result<()> {
 
 /// 批量导入 skill（source=zcode 或绝对路径）。返回 (导入数, 跳过数)。
 #[tauri::command]
-pub fn import_skills(source: String, names: Vec<String>) -> Result<(u32, u32), String> {
+pub fn import_skills(app: tauri::AppHandle, source: String, names: Vec<String>) -> Result<(u32, u32), String> {
     let src_root = if source == "zcode" {
         PathBuf::from(std::env::var("USERPROFILE").unwrap_or_default())
             .join(".zcode")
@@ -153,7 +153,7 @@ pub fn import_skills(source: String, names: Vec<String>) -> Result<(u32, u32), S
     if !src_root.exists() {
         return Err(format!("源目录不存在：{}", src_root.display()));
     }
-    let dest_root = skills_root();
+    let dest_root = skills_root(&app);
     std::fs::create_dir_all(&dest_root).map_err(|e| format!("创建 skills 目录失败：{e}"))?;
     let mut imported = 0;
     let mut skipped = 0;
@@ -170,11 +170,11 @@ pub fn import_skills(source: String, names: Vec<String>) -> Result<(u32, u32), S
 }
 
 #[tauri::command]
-pub fn delete_skill(name: String) -> Result<(), String> {
+pub fn delete_skill(app: tauri::AppHandle, name: String) -> Result<(), String> {
     if name.contains("..") || name.contains('/') || name.contains('\\') {
         return Err("条目名非法".into());
     }
-    let root = skills_root();
+    let root = skills_root(&app);
     let dir = root.join(&name);
     let flat = root.join(format!("{name}.md"));
     if dir.is_dir() {
@@ -188,17 +188,17 @@ pub fn delete_skill(name: String) -> Result<(), String> {
 
 /// 迁移 ZCode 全局指令：~/.zcode/AGENTS.md → ~/.dsh/AGENTS.md（已存在时先备份）。
 #[tauri::command]
-pub fn import_agents_md() -> Result<String, String> {
+pub fn import_agents_md(app: tauri::AppHandle) -> Result<String, String> {
     let src = PathBuf::from(std::env::var("USERPROFILE").unwrap_or_default())
         .join(".zcode")
         .join("AGENTS.md");
-    let dest = dsh_home().join("AGENTS.md");
+    let dest = dsh_home(&app).join("AGENTS.md");
     if !src.is_file() {
         return Err("未找到 ~/.zcode/AGENTS.md（ZCode 未配置全局指令）".into());
     }
-    std::fs::create_dir_all(dsh_home()).map_err(|e| format!("创建 ~/.dsh 失败：{e}"))?;
+    std::fs::create_dir_all(dsh_home(&app)).map_err(|e| format!("创建 ~/.dsh 失败：{e}"))?;
     if dest.exists() {
-        let backup = dsh_home().join("AGENTS.md.otter-bak");
+        let backup = dsh_home(&app).join("AGENTS.md.otter-bak");
         std::fs::copy(&dest, &backup).map_err(|e| format!("备份现有指令失败：{e}"))?;
         std::fs::copy(&src, &dest).map_err(|e| format!("覆盖失败：{e}"))?;
         return Ok(format!(

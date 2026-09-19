@@ -7,15 +7,7 @@ use serde::Serialize;
 use std::process::Command;
 
 use crate::backend::{resolve_dsh_entry, resolve_node, installed_dsh_dir};
-
-pub(crate) fn dsh_home() -> std::path::PathBuf {
-    if let Ok(h) = std::env::var("DSH_HOME") {
-        if !h.is_empty() {
-            return h.into();
-        }
-    }
-    std::path::PathBuf::from(std::env::var("USERPROFILE").unwrap_or_default()).join(".dsh")
-}
+use crate::settings::dsh_home;
 
 #[derive(Serialize)]
 pub struct PluginInfo {
@@ -24,8 +16,8 @@ pub struct PluginInfo {
 }
 
 #[tauri::command]
-pub fn list_plugins() -> Vec<PluginInfo> {
-    let pkg = dsh_home().join("profiles/web/package.json");
+pub fn list_plugins(app: tauri::AppHandle) -> Vec<PluginInfo> {
+    let pkg = dsh_home(&app).join("profiles/web/package.json");
     let Ok(text) = std::fs::read_to_string(pkg) else {
         return Vec::new();
     };

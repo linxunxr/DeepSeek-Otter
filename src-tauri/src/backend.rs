@@ -356,6 +356,13 @@ impl Backend {
     ) {
         let mut cmd = Command::new(&node);
         cmd.arg(&entry);
+        // 控制中心"数据目录"设置：自定义 DSH_HOME 时注入（缺省不设，dsh 用 ~/.dsh）。
+        {
+            let custom = crate::settings::dsh_home(app);
+            if custom != crate::settings::default_dsh_home() {
+                cmd.env("DSH_HOME", &custom);
+            }
+        }
         // 控制中心"模型与供应商"页生成的独立 patch 层（不碰用户手写的 cordis.patch.yml）。
         if let Some(patch) = crate::models::patch_path(app) {
             if patch.exists() {

@@ -352,7 +352,8 @@
           <button data-page="models">模型与供应商<span class="tag">规划中</span></button>
           <button data-page="plugins">插件市场<span class="tag">规划中</span></button>
           <button data-page="skills">Skill<span class="tag">规划中</span></button>
-          <button data-page="migrate">迁移工具<span class="tag">规划中</span></button>
+          <button data-page="migrate">迁移工具</button>
+          <button data-page="datahome">数据目录</button>
           <button data-page="diagnostics">诊断</button>
         </nav>
         <div class="side-foot">产品本体：dsh Web UI<br />托盘“显示”进入</div>
@@ -390,7 +391,12 @@
               <p>还没有自定义供应商，当前使用 DeepSeek 官方模型（deepseek-official）。点下方"添加供应商"接入其他家模型。</p>
             </div>
             <div id="provider-list"></div>
-            <button class="primary" id="add-provider" style="margin-top: 12px">添加供应商</button>
+            <div class="row" style="margin-top: 12px">
+              <button class="primary" id="add-provider">添加供应商</button>
+              <select id="provider-template" title="从预置模板一键填充">
+                <option value="">从模板添加…</option>
+              </select>
+            </div>
           </div>
 
           <div class="card" style="margin-top: 14px">
@@ -498,6 +504,26 @@
             </div>
           </div>
           <p id="migrate-status" style="font-size: 12px; color: var(--muted); margin: 10px 0 0"></p>
+        </section>
+
+        <section id="page-datahome">
+          <h1>数据目录</h1>
+          <p class="desc">
+            dsh 的会话、插件、Skill 等用户数据默认在 <code>C:\Users\…\.dsh</code>（C 盘）。可迁移到其他盘符：切换时自动复制现有数据并重启后端，原目录保留不动。
+          </p>
+          <div class="card">
+            <div class="row">
+              <label style="flex: 1; display: flex; flex-direction: column; gap: 4px; font-size: 12px; color: var(--muted)">
+                当前数据目录
+                <input id="dsh-home-input" placeholder="D:\dsh-data" />
+              </label>
+              <button class="primary" id="migrate-home" style="align-self: flex-end">迁移并切换</button>
+            </div>
+            <p id="home-status" style="font-size: 12px; color: var(--muted); margin: 8px 0 0"></p>
+            <p style="font-size: 12px; color: var(--warn); margin: 8px 0 0">
+              注意：迁移会临时停止后端并复制全部数据（含插件 node_modules，几百 MB 时需数分钟）；目标目录已有 dsh 数据时视为切换，不覆盖。
+            </p>
+          </div>
         </section>
 
         <section id="page-diagnostics">

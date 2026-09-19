@@ -13,6 +13,7 @@ mod backend;
 mod logging;
 mod models;
 mod plugins;
+mod settings;
 mod skills;
 mod state;
 
@@ -190,7 +191,9 @@ pub fn run() {
             skills::list_source_skills,
             skills::import_skills,
             skills::delete_skill,
-            skills::import_agents_md
+            skills::import_agents_md,
+            settings::get_otter_settings,
+            settings::migrate_dsh_home
         ])
         .setup(|app| {
             // 全局状态在 setup 里构造：需要 AppHandle 解析 appData（日志目录）。

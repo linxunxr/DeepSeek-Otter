@@ -131,6 +131,58 @@ function renderDefaultSelects(): void {
 
 // ---- 编辑器 ----
 
+// 预置供应商模板：baseURL/协议一键填充；模型 id 为常用参考，请按供应商文档核对增改。
+const PROVIDER_TEMPLATES: { label: string; data: Partial<ProviderEntry> }[] = [
+  {
+    label: "GLM（智谱）",
+    data: {
+      name: "glm", displayName: "GLM（智谱）", api: "openai-completions",
+      baseURL: "https://open.bigmodel.cn/api/paas/v4", apiKeyEnv: "GLM_API_KEY",
+      models: [{ id: "glm-5", name: "", contextWindow: null }],
+    },
+  },
+  {
+    label: "Kimi（月之暗面）",
+    data: {
+      name: "kimi", displayName: "Kimi（月之暗面）", api: "openai-completions",
+      baseURL: "https://api.moonshot.cn/v1", apiKeyEnv: "MOONSHOT_API_KEY",
+      models: [{ id: "kimi-k2.6", name: "", contextWindow: null }],
+    },
+  },
+  {
+    label: "MiniMax",
+    data: {
+      name: "minimax", displayName: "MiniMax", api: "openai-completions",
+      baseURL: "https://api.minimaxi.com/v1", apiKeyEnv: "MINIMAX_API_KEY",
+      models: [],
+    },
+  },
+  {
+    label: "通义千问（阿里）",
+    data: {
+      name: "qwen", displayName: "通义千问", api: "openai-completions",
+      baseURL: "https://dashscope.aliyuncs.com/compatible-mode/v1", apiKeyEnv: "DASHSCOPE_API_KEY",
+      models: [],
+    },
+  },
+  {
+    label: "OpenAI",
+    data: {
+      name: "openai", displayName: "OpenAI", api: "openai-completions",
+      baseURL: "https://api.openai.com/v1", apiKeyEnv: "OPENAI_API_KEY",
+      models: [],
+    },
+  },
+  {
+    label: "Anthropic",
+    data: {
+      name: "anthropic", displayName: "Anthropic", api: "anthropic",
+      baseURL: "https://api.anthropic.com", apiKeyEnv: "ANTHROPIC_API_KEY",
+      models: [{ id: "claude-sonnet-4-5", name: "", contextWindow: 200000 }],
+    },
+  },
+];
+
 function renderModelRows(models: ModelEntry[]): void {
   const box = el("model-rows");
   box.innerHTML = "";
@@ -187,6 +239,37 @@ function closeEditor(): void {
 }
 
 function initModelsPage(): void {
+  // 模板下拉：选中即以模板预填编辑器（名称冲突时自动加后缀）。
+  const tplSel = el<HTMLSelectElement>("provider-template");
+  PROVIDER_TEMPLATES.forEach((t, i) => {
+    const o = document.createElement("option");
+    o.value = String(i);
+    o.textContent = t.label;
+    tplSel.appendChild(o);
+  });
+  tplSel.onchange = () => {
+    const tpl = PROVIDER_TEMPLATES[Number(tplSel.value)];
+    tplSel.value = "";
+    if (!tpl) return;
+    openEditor(-1);
+    const d = tpl.data;
+    let name = d.name ?? "";
+    if (modelConfig.providers.some((p) => p.name === name)) {
+      name = `${name}-2`;
+    }
+    el<HTMLInputElement>("f-name").value = name;
+    el<HTMLInputElement>("f-display").value = d.displayName ?? "";
+    el<HTMLSelectElement>("f-api").value = d.api ?? "openai-completions";
+    el<HTMLInputElement>("f-base").value = d.baseURL ?? "";
+    el<HTMLInputElement>("f-keyenv").value = d.apiKeyEnv ?? "";
+    renderModelRows(
+      (d.models ?? []).map((m) => ({
+        id: (m as ModelEntry).id ?? "",
+        name: (m as ModelEntry).name ?? "",
+        contextWindow: (m as ModelEntry).contextWindow ?? null,
+      })),
+    );
+  };
   el("add-provider").addEventListener("click", () => openEditor(-1));
   el("editor-cancel").addEventListener("click", closeEditor);
   el("add-model-row").addEventListener("click", () => {
@@ -462,6 +545,33 @@ el("migrate-agents").addEventListener("click", async () => {
 el("goto-skills-import").addEventListener("click", () => {
   document.querySelector('button[data-page="skills"]')?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
   el("import-zcode-skills").click();
+});
+
+// ===================== 数据目录 =====================
+
+void invoke<string>("get_otter_settings")
+  .then((raw) => {
+    const s = JSON.parse(raw) as { dshHome?: string };
+    if (s.dshHome) el<HTMLInputElement>("dsh-home-input").value = s.dshHome;
+  })
+  .catch(() => {});
+el("migrate-home").addEventListener("click", async () => {
+  const path = el<HTMLInputElement>("dsh-home-input").value.trim();
+  if (!path) {
+    el("home-status").textContent = "请输入目标目录（如 D:\\dsh-data）";
+    return;
+  }
+  const btn = el<HTMLButtonElement>("migrate-home");
+  btn.disabled = true;
+  el("home-status").textContent = "迁移中（复制数据并重启后端，可能需要数分钟）…";
+  try {
+    const msg = await invoke<string>("migrate_dsh_home", { newHome: path });
+    el("home-status").textContent = msg;
+  } catch (e) {
+    el("home-status").textContent = `失败：${e}`;
+  } finally {
+    btn.disabled = false;
+  }
 });
 
 // 诊断导出（IPC 命令在 lib.rs）。
