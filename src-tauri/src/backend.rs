@@ -355,8 +355,14 @@ impl Backend {
         entry: PathBuf,
     ) {
         let mut cmd = Command::new(&node);
-        cmd.arg(&entry)
-            .args(["web", "--no-open", "--port", "0"])
+        cmd.arg(&entry);
+        // 控制中心"模型与供应商"页生成的独立 patch 层（不碰用户手写的 cordis.patch.yml）。
+        if let Some(patch) = crate::models::patch_path(app) {
+            if patch.exists() {
+                cmd.args(["--patch"]).arg(&patch);
+            }
+        }
+        cmd.args(["web", "--no-open", "--port", "0"])
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .stdin(Stdio::null());

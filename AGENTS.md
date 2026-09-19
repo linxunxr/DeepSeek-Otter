@@ -60,8 +60,10 @@ pnpm smoke:fresh       # 冒烟：首装形态（删 smoke 独立 appData，含 
 
 ```text
 index.html / src/         壳本地页面（加载页/诊断页，纯 TS，无框架）
+control.html / src/control.ts  控制中心页面（更新/模型与供应商/诊断，同一壳页面体系）
 src-tauri/src/lib.rs      壳入口：窗口、托盘、单实例、关窗驻留、IPC 命令、诊断导出
 src-tauri/src/backend.rs  dsh 后端生命周期状态机（安装/spawn/就绪解析/停止/自动重启）
+src-tauri/src/models.rs   模型与供应商配置（appData JSON 源 → 派生 YAML patch，--patch 注入 dsh）
 src-tauri/src/logging.rs  落盘日志（appData/logs/otter-<日期>.log，按天滚动保留 7 份）
 src-tauri/src/state.rs    全局状态（Backend + FileLog + 壳页面 URL）
 src-tauri/tauri.conf.json Tauri 配置（窗口、打包目标、capability 绑定）

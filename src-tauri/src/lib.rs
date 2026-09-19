@@ -11,6 +11,7 @@ use tauri::{
 
 mod backend;
 mod logging;
+mod models;
 mod state;
 
 use state::OtterState;
@@ -177,7 +178,9 @@ pub fn run() {
             restart_backend,
             stop_backend,
             show_control_center,
-            export_diagnostics
+            export_diagnostics,
+            models::get_model_config,
+            models::set_model_config
         ])
         .setup(|app| {
             // 全局状态在 setup 里构造：需要 AppHandle 解析 appData（日志目录）。

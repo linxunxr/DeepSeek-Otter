@@ -256,6 +256,85 @@
         word-break: break-all;
         user-select: text;
       }
+      /* 模型与供应商页 */
+      .form-grid {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 10px 14px;
+      }
+      .form-grid label {
+        display: flex;
+        flex-direction: column;
+        gap: 4px;
+        font-size: 12px;
+        color: var(--muted);
+      }
+      input,
+      select {
+        background: var(--bg);
+        border: 1px solid var(--border);
+        color: var(--fg);
+        border-radius: 6px;
+        padding: 7px 10px;
+        font-size: 13px;
+        min-width: 0;
+      }
+      input:focus,
+      select:focus {
+        outline: none;
+        border-color: var(--accent);
+      }
+      .model-row {
+        display: grid;
+        grid-template-columns: 1.2fr 1.2fr 0.8fr auto;
+        gap: 8px;
+        margin-bottom: 8px;
+        align-items: center;
+      }
+      .model-row button {
+        background: transparent;
+        border: none;
+        color: var(--err);
+        cursor: pointer;
+        font-size: 15px;
+        padding: 2px 8px;
+      }
+      .provider-item {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        gap: 10px;
+        padding: 10px 12px;
+        border: 1px solid var(--border);
+        border-radius: 8px;
+        margin-bottom: 8px;
+      }
+      .provider-item .p-main {
+        min-width: 0;
+      }
+      .provider-item .p-name {
+        font-weight: 600;
+        font-size: 13px;
+      }
+      .provider-item .p-meta {
+        font-size: 12px;
+        color: var(--muted);
+        word-break: break-all;
+      }
+      .provider-item .p-ops {
+        display: flex;
+        gap: 6px;
+        flex-shrink: 0;
+      }
+      .provider-item .p-ops button {
+        background: #2a3040;
+        border: none;
+        color: var(--fg);
+        border-radius: 6px;
+        padding: 4px 10px;
+        font-size: 12px;
+        cursor: pointer;
+      }
     </style>
   </head>
   <body>
@@ -302,11 +381,59 @@
 
         <section id="page-models">
           <h1>模型与供应商</h1>
-          <p class="desc">管理多个供应商的模型接入与默认模型。</p>
-          <div class="card placeholder">
-            <div class="icon">🔌</div>
-            <h2>规划中</h2>
-            <p>dsh 已支持自定义模型供应商（模型探测、上下文窗口回填）。这里将提供配置界面：供应商地址、API Key、默认模型与按会话切换。</p>
+          <p class="desc">
+            配置多个模型供应商（OpenAI 兼容网关等），新会话默认模型可切换。配置以独立层注入 dsh，不影响手写的高级配置；保存后需重启后端生效。
+          </p>
+          <div class="card">
+            <div id="models-empty" class="placeholder" style="display: none">
+              <div class="icon">🔌</div>
+              <p>还没有自定义供应商，当前使用 DeepSeek 官方模型（deepseek-official）。点下方"添加供应商"接入其他家模型。</p>
+            </div>
+            <div id="provider-list"></div>
+            <button class="primary" id="add-provider" style="margin-top: 12px">添加供应商</button>
+          </div>
+
+          <div class="card" style="margin-top: 14px">
+            <h2 style="font-size: 14px; margin: 0 0 10px">默认模型</h2>
+            <div class="row" style="margin-bottom: 0">
+              <select id="default-provider"></select>
+              <select id="default-model"></select>
+            </div>
+            <p class="desc" style="margin: 8px 0 0">新会话默认使用；dsh 内仍可按会话切换。选择"内置默认"则沿用 DeepSeek 官方。</p>
+          </div>
+
+          <div style="display: flex; gap: 10px; margin-top: 16px; align-items: center">
+            <button class="primary" id="save-models" disabled>保存</button>
+            <button class="plain" id="restart-backend-btn" style="display: none">重启后端生效</button>
+            <span id="models-status" style="color: var(--muted); font-size: 12px"></span>
+          </div>
+
+          <!-- 供应商编辑器（添加/编辑共用，内联卡片） -->
+          <div class="card" id="provider-editor" style="display: none; margin-top: 14px">
+            <h2 style="font-size: 14px; margin: 0 0 12px" id="editor-title">添加供应商</h2>
+            <div class="form-grid">
+              <label>路由名（字母数字-_）<input id="f-name" placeholder="my-gateway" /></label>
+              <label>显示名（可选）<input id="f-display" placeholder="我的网关" /></label>
+              <label>API 协议
+                <select id="f-api">
+                  <option value="openai-completions">openai-completions</option>
+                  <option value="openai-responses">openai-responses</option>
+                  <option value="anthropic">anthropic</option>
+                </select>
+              </label>
+              <label>Base URL<input id="f-base" placeholder="https://gateway.example/v1" /></label>
+              <label>API Key 环境变量（可选）<input id="f-keyenv" placeholder="MY_GATEWAY_API_KEY" /></label>
+            </div>
+            <div style="margin-top: 4px">
+              <div style="font-size: 12px; color: var(--muted); margin-bottom: 6px">模型列表（id 必填；上下文窗口影响长会话表现）</div>
+              <div id="model-rows"></div>
+              <button class="plain" id="add-model-row" style="margin-top: 8px; padding: 4px 12px; font-size: 12px">+ 添加模型</button>
+            </div>
+            <div style="display: flex; gap: 10px; margin-top: 14px">
+              <button class="primary" id="editor-save">确定</button>
+              <button class="plain" id="editor-cancel">取消</button>
+              <span id="editor-error" style="color: var(--err); font-size: 12px; align-self: center"></span>
+            </div>
           </div>
         </section>
 

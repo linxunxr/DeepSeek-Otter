@@ -1,4 +1,4 @@
-// 控制中心页面逻辑：导航切换 + 概览与更新（复用 updater.ts）+ 诊断导出。
+// 控制中心页面逻辑：导航切换 + 概览与更新（复用 updater.ts）+ 模型与供应商 + 诊断导出。
 // 壳本地页面之一，与加载页同源，享有 Tauri IPC 权限（见 capabilities）。
 
 import { getVersion } from "@tauri-apps/api/app";
@@ -32,6 +32,258 @@ if (nav) {
 // 更新面板与加载页共用 updater.ts；initUpdaterUI 自带启动静默检查。
 initUpdaterUI();
 document.getElementById("check-now")?.addEventListener("click", () => void doCheck(false));
+
+// ===================== 模型与供应商 =====================
+
+interface ModelEntry {
+  id: string;
+  name: string;
+  contextWindow: number | null;
+}
+interface ProviderEntry {
+  name: string;
+  displayName: string;
+  api: string;
+  baseURL: string;
+  apiKeyEnv: string;
+  models: ModelEntry[];
+}
+interface ModelConfig {
+  providers: ProviderEntry[];
+  defaultProvider: string | null;
+  defaultModel: string | null;
+}
+
+let modelConfig: ModelConfig = { providers: [], defaultProvider: null, defaultModel: null };
+let modelDirty = false;
+let editingIndex = -1; // -1 = 新增
+
+function el<T extends HTMLElement>(id: string): T {
+  return document.getElementById(id) as T;
+}
+
+function markDirty(dirty: boolean): void {
+  modelDirty = dirty;
+  (el<HTMLButtonElement>("save-models")).disabled = !dirty;
+  el<HTMLButtonElement>("restart-backend-btn").style.display = dirty ? "none" : "inline-block";
+  el("models-status").textContent = dirty ? "有未保存的修改" : "";
+}
+
+function renderProviders(): void {
+  const list = el("provider-list");
+  list.innerHTML = "";
+  el("models-empty").style.display = modelConfig.providers.length ? "none" : "block";
+  modelConfig.providers.forEach((p, i) => {
+    const item = document.createElement("div");
+    item.className = "provider-item";
+    const models = p.models.map((m) => m.id).join("、") || "（未配置模型）";
+    item.innerHTML = `
+      <div class="p-main">
+        <div class="p-name">${p.displayName || p.name}</div>
+        <div class="p-meta">${p.api} · ${p.baseURL || "（无 baseURL）"} · 模型：${models}</div>
+      </div>
+      <div class="p-ops">
+        <button data-op="edit" data-i="${i}">编辑</button>
+        <button data-op="del" data-i="${i}">删除</button>
+      </div>`;
+    list.appendChild(item);
+  });
+  renderDefaultSelects();
+}
+
+function renderDefaultSelects(): void {
+  const pSel = el<HTMLSelectElement>("default-provider");
+  const mSel = el<HTMLSelectElement>("default-model");
+  pSel.innerHTML = `<option value="">（内置默认）</option>`;
+  modelConfig.providers.forEach((p) => {
+    const o = document.createElement("option");
+    o.value = p.name;
+    o.textContent = p.displayName || p.name;
+    pSel.appendChild(o);
+  });
+  pSel.value = modelConfig.defaultProvider ?? "";
+  const refreshModels = (): void => {
+    mSel.innerHTML = "";
+    const p = modelConfig.providers.find((x) => x.name === pSel.value);
+    (p?.models ?? []).forEach((m) => {
+      const o = document.createElement("option");
+      o.value = m.id;
+      o.textContent = m.name ? `${m.name}（${m.id}）` : m.id;
+      mSel.appendChild(o);
+    });
+    mSel.value = p && p.models.some((m) => m.id === modelConfig.defaultModel)
+      ? (modelConfig.defaultModel as string)
+      : "";
+    mSel.disabled = !p;
+  };
+  refreshModels();
+  pSel.onchange = () => {
+    modelConfig.defaultProvider = pSel.value || null;
+    modelConfig.defaultModel = null;
+    refreshModels();
+    markDirty(true);
+  };
+  mSel.onchange = () => {
+    modelConfig.defaultModel = mSel.value || null;
+    markDirty(true);
+  };
+}
+
+// ---- 编辑器 ----
+
+function renderModelRows(models: ModelEntry[]): void {
+  const box = el("model-rows");
+  box.innerHTML = "";
+  models.forEach((m, i) => {
+    const row = document.createElement("div");
+    row.className = "model-row";
+    row.innerHTML = `
+      <input data-f="id" data-i="${i}" placeholder="模型 id，如 gpt-5" value="${m.id.replace(/"/g, "&quot;")}" />
+      <input data-f="name" data-i="${i}" placeholder="显示名（可选）" value="${m.name.replace(/"/g, "&quot;")}" />
+      <input data-f="cw" data-i="${i}" placeholder="上下文窗口" value="${m.contextWindow ?? ""}" />
+      <button data-op="del-model" data-i="${i}" title="删除">×</button>`;
+    box.appendChild(row);
+  });
+}
+
+function collectEditorModels(): { models: ModelEntry[]; error: string | null } {
+  const models: ModelEntry[] = [];
+  const inputs = el("model-rows").querySelectorAll<HTMLInputElement>("input");
+  const rows = new Map<number, Record<string, string>>();
+  inputs.forEach((inp) => {
+    const i = Number(inp.dataset.i);
+    const r = rows.get(i) ?? {};
+    r[inp.dataset.f as string] = inp.value.trim();
+    rows.set(i, r);
+  });
+  for (const [, r] of rows) {
+    if (!r.id && !r.name && !r.cw) continue; // 整行为空跳过
+    if (!r.id) return { models, error: "模型 id 必填" };
+    const cw = r.cw ? Number(r.cw) : null;
+    if (cw !== null && (!Number.isFinite(cw) || cw <= 0)) return { models, error: "上下文窗口须为正整数" };
+    models.push({ id: r.id, name: r.name ?? "", contextWindow: cw });
+  }
+  return { models, error: null };
+}
+
+function openEditor(index: number): void {
+  editingIndex = index;
+  const p = index >= 0 ? modelConfig.providers[index] : null;
+  el("editor-title").textContent = p ? `编辑供应商：${p.name}` : "添加供应商";
+  el<HTMLInputElement>("f-name").value = p?.name ?? "";
+  el<HTMLInputElement>("f-name").disabled = !!p; // 路由名是键，编辑态禁改
+  el<HTMLInputElement>("f-display").value = p?.displayName ?? "";
+  el<HTMLSelectElement>("f-api").value = p?.api ?? "openai-completions";
+  el<HTMLInputElement>("f-base").value = p?.baseURL ?? "";
+  el<HTMLInputElement>("f-keyenv").value = p?.apiKeyEnv ?? "";
+  renderModelRows(p?.models ?? []);
+  el("editor-error").textContent = "";
+  el("provider-editor").style.display = "block";
+}
+
+function closeEditor(): void {
+  editingIndex = -2; // 关闭态
+  el("provider-editor").style.display = "none";
+}
+
+function initModelsPage(): void {
+  el("add-provider").addEventListener("click", () => openEditor(-1));
+  el("editor-cancel").addEventListener("click", closeEditor);
+  el("add-model-row").addEventListener("click", () => {
+    // 从当前编辑器收集已有行再追加一行空行（保住未确定录入的值）。
+    const { models } = collectEditorModels();
+    renderModelRows([...models, { id: "", name: "", contextWindow: null }]);
+  });
+  el("model-rows").addEventListener("click", (e) => {
+    const btn = (e.target as HTMLElement).closest<HTMLElement>("button[data-op='del-model']");
+    if (!btn) return;
+    const { models } = collectEditorModels();
+    models.splice(Number(btn.dataset.i), 1);
+    renderModelRows(models);
+  });
+  el("editor-save").addEventListener("click", () => {
+    const { models, error } = collectEditorModels();
+    if (error) {
+      el("editor-error").textContent = error;
+      return;
+    }
+    const name = el<HTMLInputElement>("f-name").value.trim();
+    if (!name || !/^[a-zA-Z0-9_-]+$/.test(name)) {
+      el("editor-error").textContent = "路由名必填，仅限字母数字、-、_";
+      return;
+    }
+    if (modelConfig.providers.some((p, i) => i !== editingIndex && p.name === name)) {
+      el("editor-error").textContent = `路由名 ${name} 已存在`;
+      return;
+    }
+    const entry: ProviderEntry = {
+      name,
+      displayName: el<HTMLInputElement>("f-display").value.trim(),
+      api: el<HTMLSelectElement>("f-api").value,
+      baseURL: el<HTMLInputElement>("f-base").value.trim(),
+      apiKeyEnv: el<HTMLInputElement>("f-keyenv").value.trim(),
+      models,
+    };
+    if (editingIndex >= 0) modelConfig.providers[editingIndex] = entry;
+    else modelConfig.providers.push(entry);
+    if (modelConfig.defaultProvider && !modelConfig.providers.some((p) => p.name === modelConfig.defaultProvider)) {
+      modelConfig.defaultProvider = null;
+      modelConfig.defaultModel = null;
+    }
+    closeEditor();
+    renderProviders();
+    markDirty(true);
+  });
+  el("provider-list").addEventListener("click", (e) => {
+    const btn = (e.target as HTMLElement).closest<HTMLElement>("button[data-op]");
+    if (!btn) return;
+    const i = Number(btn.dataset.i);
+    if (btn.dataset.op === "edit") openEditor(i);
+    else {
+      modelConfig.providers.splice(i, 1);
+      renderProviders();
+      markDirty(true);
+    }
+  });
+  el("save-models").addEventListener("click", async () => {
+    el("models-status").textContent = "保存中…";
+    try {
+      await invoke("set_model_config", { config: JSON.stringify(modelConfig) });
+      markDirty(false);
+      el("models-status").textContent = "已保存，重启后端后生效";
+    } catch (e) {
+      el("models-status").textContent = `保存失败：${e}`;
+    }
+  });
+  el("restart-backend-btn").addEventListener("click", async () => {
+    el("models-status").textContent = "正在重启后端…";
+    try {
+      await invoke("restart_backend");
+      el("models-status").textContent = "后端重启中，稍后打开主窗口即可";
+    } catch (e) {
+      el("models-status").textContent = `重启失败：${e}`;
+    }
+  });
+  // 加载已存配置。
+  void invoke<string | null>("get_model_config")
+    .then((raw) => {
+      if (raw) {
+        const parsed = JSON.parse(raw) as ModelConfig;
+        modelConfig = {
+          providers: parsed.providers ?? [],
+          defaultProvider: parsed.defaultProvider ?? null,
+          defaultModel: parsed.defaultModel ?? null,
+        };
+      }
+    })
+    .catch(() => {})
+    .finally(() => {
+      renderProviders();
+      markDirty(false);
+    });
+}
+closeEditor(); // 初始关闭态
+initModelsPage();
 
 // 诊断导出（IPC 命令在 lib.rs）。
 document.getElementById("export-diag")?.addEventListener("click", async () => {
