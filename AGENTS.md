@@ -54,6 +54,7 @@ pnpm smoke:fresh       # 冒烟：首装形态（删 smoke 独立 appData，含 
 
 - **单元测试**：`src-tauri/src/backend.rs` 的 `#[cfg(test)]` 模块，覆盖就绪行解析（`parse_ready_url`）与 upstream pin 解析（`parse_pinned_dsh_version`）等纯函数。新增可测逻辑优先抽纯函数再测。
 - **冒烟测试**：`scripts/smoke-test.mjs` 黑盒驱动 release exe，断言五步：应用启动 → dsh 后端拉起 → 回环端口 + 无 token 401（鉴权在位）→ 第二实例不破坏主实例（单实例锁）→ 退出后进程树终止且端口释放。改动生命周期/启动链/打包配置后必须跑。**与运行中实例隔离**：`pnpm smoke:build` 用 `tauri.smoke.conf.json`（identifier 加 `.smoke`）构建专用 exe，单实例锁与 appData 全独立，测试不动用户正在运行的 Otter——注意 `--config` 构建会覆盖 `target/release/deepseek-otter.exe`，所以产物复制为 `deepseek-otter-smoke.exe` 保存，要出正式产物需重新 `pnpm tauri build --no-bundle`。无 smoke exe 时回退正式 exe 并预检停止已运行实例（兜底路径，会中断进行中的会话）。
+- **排障/手动验证与生产隔离（硬约定）**：手动验证与冒烟同规则——用 smoke exe + `.smoke` 独立 appData（可往里塞测试配置，测完清理残留）；**绝不 kill/重启用户正在运行的正式实例**，故障循环中的实例也一样，确需操作先征得同意（2026-09-19 排障时 taskkill 正式实例被纠正）。定位正式版安装位置走注册表 Uninstall 键（HKCU/HKLM `...\Uninstall\*` 查 DisplayName），装机路径不固定。
 - **CI**：`.github/workflows/ci.yml`（windows-latest）：检查 → 单测 → fetch-runtime → 构建 → fresh 冒烟。跑中国镜像源，可用 `MIRROR`/`NPM_REGISTRY` 环境变量覆盖。
 
 ## 代码结构
