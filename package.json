@@ -1,6 +1,6 @@
 {
   "name": "deepseek-otter",
-  "version": "0.1.2",
+  "version": "0.1.3",
   "description": "DeepSeek Harness (dsh) 的轻量桌面发行版",
   "private": true,
   "type": "module",
