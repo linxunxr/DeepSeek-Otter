@@ -82,7 +82,7 @@ src-tauri/capabilities/   IPC 权限声明（仅授予壳本地页面，不授�
 
 - dsh 处于 developer preview，破坏性变更频发；每次发版前跑冒烟清单（启动 → 新建会话 → 发消息 → 关窗再开）。
 - `pnpm tauri build` 首次会从 GitHub 下载 NSIS（~2.4 MB），网络差会 `unexpected end of file` 失败；手动下载 nsis-3.11.zip 解压到 `%LOCALAPPDATA%\tauri\nsis-3.11\` 再重试。
-- `pnpm tauri build` 需要有效图标（`src-tauri/icons/icon.ico`，当前是占位图标）。
+- `pnpm tauri build` 需要有效图标（`src-tauri/icons/icon.ico` 多尺寸）。源图 `app-icon.png`（1024×1024）由 `scripts/make-icon.ps1` 生成（PowerShell 5.1 读无 BOM 的 UTF-8 脚本会把中文注释读乱破坏解析，文件须带 BOM）；改图标流程：改脚本或换源图 → `pnpm tauri icon app-icon.png` 重新生成全套。
 - Git Bash 里传 `/S /D=` 给 NSIS 安装器会被 MSYS 路径转换破坏参数，静默安装/卸载用 PowerShell `Start-Process -ArgumentList` 执行。
 - Git Bash 管道下 `taskkill` 输出与日志 `cat` 的中文乱码是编码问题，不影响功能（日志文件本身 UTF-8 正常）。
 - GitHub Actions step 级 `if` 里不能用 `secrets` 上下文（workflow_dispatch 校验直接 422）；统一经 `env:` 传值、脚本内判空。`curl -f` 会丢弃 4xx/5xx 响应体，排障时要拿 body 就别加 `-f`。
