@@ -1,0 +1,355 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Otter 控制中心</title>
+    <style>
+      :root {
+        color-scheme: dark;
+        --bg: #0f1115;
+        --panel: #161a22;
+        --border: #232936;
+        --fg: #e6e8ee;
+        --muted: #8a93a6;
+        --accent: #4d6bfe;
+        --ok: #2ea44f;
+        --warn: #d29922;
+        --err: #f85149;
+      }
+      * {
+        box-sizing: border-box;
+      }
+      html,
+      body {
+        margin: 0;
+        height: 100%;
+        background: var(--bg);
+        color: var(--fg);
+        font-family: "Segoe UI", "Microsoft YaHei", system-ui, sans-serif;
+        font-size: 14px;
+      }
+      .layout {
+        display: flex;
+        height: 100vh;
+      }
+      /* 顶栏与左侧导航 */
+      .sidebar {
+        width: 190px;
+        flex-shrink: 0;
+        border-right: 1px solid var(--border);
+        background: var(--panel);
+        display: flex;
+        flex-direction: column;
+      }
+      .brand {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        padding: 16px 14px 12px;
+        font-weight: 600;
+      }
+      .brand .logo {
+        font-size: 22px;
+      }
+      .brand small {
+        display: block;
+        color: var(--muted);
+        font-size: 11px;
+        font-weight: 400;
+      }
+      nav {
+        flex: 1;
+        padding: 6px;
+        display: flex;
+        flex-direction: column;
+        gap: 2px;
+      }
+      nav button {
+        text-align: left;
+        background: transparent;
+        border: none;
+        color: var(--muted);
+        padding: 9px 12px;
+        border-radius: 6px;
+        font-size: 13px;
+        cursor: pointer;
+      }
+      nav button:hover {
+        background: #1d2230;
+        color: var(--fg);
+      }
+      nav button.active {
+        background: #232a3d;
+        color: var(--fg);
+        font-weight: 600;
+      }
+      nav button .tag {
+        float: right;
+        font-size: 10px;
+        color: var(--warn);
+      }
+      .side-foot {
+        padding: 12px 14px;
+        border-top: 1px solid var(--border);
+        color: var(--muted);
+        font-size: 11px;
+      }
+      /* 内容区 */
+      .content {
+        flex: 1;
+        overflow-y: auto;
+        padding: 24px 28px;
+      }
+      section {
+        display: none;
+      }
+      section.active {
+        display: block;
+      }
+      h1 {
+        font-size: 18px;
+        margin: 0 0 6px;
+      }
+      .desc {
+        color: var(--muted);
+        font-size: 13px;
+        margin: 0 0 18px;
+        line-height: 1.6;
+      }
+      .card {
+        background: var(--panel);
+        border: 1px solid var(--border);
+        border-radius: 10px;
+        padding: 18px;
+      }
+      .row {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        margin-bottom: 14px;
+      }
+      .ver {
+        font-family: Consolas, monospace;
+        font-size: 15px;
+        font-weight: 600;
+      }
+      .ver .cur {
+        color: var(--muted);
+        font-weight: 400;
+      }
+      button.primary {
+        background: var(--accent);
+        border: none;
+        color: #fff;
+        padding: 7px 18px;
+        border-radius: 6px;
+        font-size: 13px;
+        cursor: pointer;
+      }
+      button.primary:hover {
+        filter: brightness(1.1);
+      }
+      button.plain {
+        background: #2a3040;
+        border: none;
+        color: var(--fg);
+        padding: 7px 18px;
+        border-radius: 6px;
+        font-size: 13px;
+        cursor: pointer;
+      }
+      button:disabled {
+        opacity: 0.5;
+        cursor: not-allowed;
+      }
+      /* 更新面板（元素 id 与 index.html 一致，逻辑复用 updater.ts） */
+      #update-panel {
+        display: none;
+        flex-direction: column;
+        align-items: flex-start;
+        gap: 10px;
+        margin-top: 6px;
+      }
+      #update-status-text {
+        color: var(--muted);
+      }
+      #update-meta {
+        font-size: 13px;
+      }
+      #update-meta strong {
+        font-family: Consolas, monospace;
+      }
+      .update-notes {
+        max-width: 560px;
+        max-height: 260px;
+        overflow-y: auto;
+        color: var(--muted);
+        font-size: 12px;
+        line-height: 1.6;
+        user-select: text;
+        background: var(--bg);
+        border: 1px solid var(--border);
+        border-radius: 8px;
+        padding: 10px 14px;
+      }
+      .update-notes h3 {
+        margin: 8px 0 4px;
+        font-size: 13px;
+        color: var(--fg);
+      }
+      .update-notes h3:first-child {
+        margin-top: 0;
+      }
+      .update-notes ul {
+        margin: 4px 0;
+        padding-left: 18px;
+      }
+      .update-notes li {
+        margin: 3px 0;
+      }
+      .update-notes code {
+        font-family: Consolas, monospace;
+        background: #232936;
+        border-radius: 3px;
+        padding: 1px 4px;
+      }
+      .progress-track {
+        width: min(360px, 100%);
+        height: 6px;
+        background: #232936;
+        border-radius: 3px;
+        overflow: hidden;
+      }
+      #update-progress {
+        display: none;
+        height: 100%;
+        width: 0%;
+        background: var(--accent);
+      }
+      /* 占位页 */
+      .placeholder {
+        text-align: center;
+        padding: 48px 0;
+        color: var(--muted);
+      }
+      .placeholder .icon {
+        font-size: 34px;
+        margin-bottom: 10px;
+      }
+      .placeholder h2 {
+        font-size: 15px;
+        color: var(--fg);
+        margin: 0 0 8px;
+      }
+      .placeholder p {
+        font-size: 13px;
+        margin: 0;
+        line-height: 1.7;
+        max-width: 420px;
+        margin-inline: auto;
+      }
+      #diag-result {
+        margin-top: 10px;
+        font-size: 12px;
+        color: var(--muted);
+        word-break: break-all;
+        user-select: text;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="layout">
+      <aside class="sidebar">
+        <div class="brand">
+          <span class="logo">🦦</span>
+          <span>
+            Otter 控制中心
+            <small id="ver-badge">…</small>
+          </span>
+        </div>
+        <nav id="nav">
+          <button data-page="overview" class="active">概览与更新</button>
+          <button data-page="models">模型与供应商<span class="tag">规划中</span></button>
+          <button data-page="plugins">插件市场<span class="tag">规划中</span></button>
+          <button data-page="skills">Skill<span class="tag">规划中</span></button>
+          <button data-page="migrate">迁移工具<span class="tag">规划中</span></button>
+          <button data-page="diagnostics">诊断</button>
+        </nav>
+        <div class="side-foot">产品本体：dsh Web UI<br />托盘“显示”进入</div>
+      </aside>
+      <main class="content">
+        <section id="page-overview" class="active">
+          <h1>概览与更新</h1>
+          <p class="desc">启动时会自动检查新版本（有新版才提示）；这里可随时手动检查，下载与安装始终由你确认。</p>
+          <div class="card">
+            <div class="row">
+              <span class="ver"><span class="cur">当前版本 v</span><span id="cur-ver">…</span></span>
+              <button class="primary" id="check-now">检查更新</button>
+            </div>
+            <div id="update-panel">
+              <span id="update-status-text"></span>
+              <div id="update-meta" style="display: none"></div>
+              <div id="update-notes" class="update-notes" style="display: none"></div>
+              <div class="progress-track"><div id="update-progress"></div></div>
+              <div style="display: flex; gap: 10px">
+                <button class="primary" id="update-install" style="display: none">立即更新</button>
+                <button class="plain" id="update-close">关闭</button>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <section id="page-models">
+          <h1>模型与供应商</h1>
+          <p class="desc">管理多个供应商的模型接入与默认模型。</p>
+          <div class="card placeholder">
+            <div class="icon">🔌</div>
+            <h2>规划中</h2>
+            <p>dsh 已支持自定义模型供应商（模型探测、上下文窗口回填）。这里将提供配置界面：供应商地址、API Key、默认模型与按会话切换。</p>
+          </div>
+        </section>
+
+        <section id="page-plugins">
+          <h1>插件市场</h1>
+          <p class="desc">浏览、安装与管理 dsh 插件。</p>
+          <div class="card placeholder">
+            <div class="icon">🧩</div>
+            <h2>规划中</h2>
+            <p>dsh 已有插件系统与运行时依赖解析。这里将提供自定义插件市场：插件源、精选清单、一键安装与离线预装。</p>
+          </div>
+        </section>
+
+        <section id="page-skills">
+          <h1>Skill</h1>
+          <p class="desc">管理 Skill 能力包：浏览、安装、启停。</p>
+          <div class="card placeholder">
+            <div class="icon">🎯</div>
+            <h2>规划中</h2>
+            <p>dsh 已有 Skill 体系（选择器、模糊搜索）。这里将提供 Skill 包的管理界面与安装来源。</p>
+          </div>
+        </section>
+
+        <section id="page-migrate">
+          <h1>迁移工具</h1>
+          <p class="desc">从其他工具迁入会话与配置。</p>
+          <div class="card placeholder">
+            <div class="icon">📦</div>
+            <h2>规划中</h2>
+            <p>计划支持从 ZCode 等工具迁移会话数据与配置到 dsh 格式。</p>
+          </div>
+        </section>
+
+        <section id="page-diagnostics">
+          <h1>诊断</h1>
+          <p class="desc">导出包含壳版本、后端状态与近期日志的诊断包，用于问题反馈。</p>
+          <div class="card">
+            <button class="primary" id="export-diag">导出诊断包</button>
+            <div id="diag-result"></div>
+          </div>
+        </section>
+      </main>
+    </div>
+    <script type="module" src="/src/control.ts"></script>
+  </body>
+</html>

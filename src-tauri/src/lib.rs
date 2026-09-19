@@ -197,9 +197,9 @@ pub fn run() {
 
 fn setup_tray(app: &tauri::App) -> tauri::Result<()> {
     let show = MenuItem::with_id(app, "show", "显示 DeepSeek Otter", true, None::<&str>)?;
-    let check_update = MenuItem::with_id(app, "check-update", "检查更新…", true, None::<&str>)?;
+    let control = MenuItem::with_id(app, "control", "控制中心", true, None::<&str>)?;
     let quit = MenuItem::with_id(app, "quit", "退出", true, None::<&str>)?;
-    let menu = Menu::with_items(app, &[&show, &check_update, &quit])?;
+    let menu = Menu::with_items(app, &[&show, &control, &quit])?;
 
     let mut builder = TrayIconBuilder::with_id("otter-tray")
         .icon(app.default_window_icon().cloned().unwrap())
@@ -207,18 +207,9 @@ fn setup_tray(app: &tauri::App) -> tauri::Result<()> {
         .show_menu_on_left_click(false)
         .on_menu_event(|app, event| match event.id.as_ref() {
             "show" => show_main_window(app),
-            "check-update" => {
-                // 打开壳页面并触发前端更新检查（UI/进度/确认都在壳页面里）。
-                if let Some(window) = app.get_webview_window("main") {
-                    let state = app.state::<OtterState>();
-                    if let Some(url) = state.shell_url() {
-                        let _ = window.navigate(url);
-                    }
-                    let _ = window.show();
-                    let _ = window.set_focus();
-                    use tauri::Emitter;
-                    let _ = window.emit("check-update", ());
-                }
+            "control" => {
+                // 控制中心：更新/版本/诊断等壳功能的常驻前台窗口。
+                open_control_center(app);
             }
             "quit" => {
                 app.state::<OtterState>().backend.stop();
@@ -241,16 +232,40 @@ fn setup_tray(app: &tauri::App) -> tauri::Result<()> {
     builder.build(app)?;
 
     // 驻留期更新轮询：关窗驻留可能多天不重启，启动时的壳页面检查覆盖不到，
-    // 定时拉一次清单补盲区（发现新版改写菜单项文字提示，仍不自动下载）。
-    spawn_update_poll(app.handle().clone(), check_update);
+    // 定时拉一次清单补盲区（发现新版弹控制中心 + 改写菜单项文字，仍不自动下载）。
+    spawn_update_poll(app.handle().clone(), control);
     Ok(())
+}
+
+/// 打开控制中心窗口：已存在则前置，否则按壳页面 origin 拼 control.html 新建
+/// （dev 为 devUrl、打包为 tauri 协议，与主窗口同源，capability 已放行）。
+fn open_control_center(app: &tauri::AppHandle) {
+    if let Some(win) = app.get_webview_window("control") {
+        let _ = win.show();
+        let _ = win.set_focus();
+        return;
+    }
+    let Some(shell) = app.state::<OtterState>().shell_url() else { return };
+    let origin = match shell.port() {
+        Some(p) => format!("{}://{}:{p}", shell.scheme(), shell.host_str().unwrap_or("tauri.localhost")),
+        None => format!("{}://{}", shell.scheme(), shell.host_str().unwrap_or("tauri.localhost")),
+    };
+    let url: tauri::Url = format!("{origin}/control.html")
+        .parse()
+        .expect("控制中心 URL 合法");
+    let _ = tauri::WebviewWindowBuilder::new(app, "control", tauri::WebviewUrl::External(url))
+        .title("Otter 控制中心")
+        .inner_size(780.0, 560.0)
+        .min_inner_size(640.0, 480.0)
+        .center()
+        .build();
 }
 
 /// 驻留期更新轮询间隔：24 小时。首轮等满一个间隔（启动检查已由壳页面做过）。
 const UPDATE_POLL_INTERVAL: std::time::Duration = std::time::Duration::from_secs(24 * 3600);
 
-/// 后台轮询新版本：发现新版把托盘"检查更新…"改为"发现新版本 vX.Y.Z…"，
-/// 用户点该项仍走壳页面的手动检查流程（看 notes、决定何时安装）。
+/// 后台轮询新版本：发现新版把托盘"控制中心"菜单项改为"发现新版本 vX.Y.Z…"并
+/// 弹出控制中心（前台直达更新面板），安装仍由用户确认。
 /// 仅提示不下载——不自动消耗流量；检查失败静默等下一轮。
 fn spawn_update_poll(app: tauri::AppHandle, item: MenuItem<tauri::Wry>) {
     std::thread::spawn(move || loop {
@@ -260,6 +275,7 @@ fn spawn_update_poll(app: tauri::AppHandle, item: MenuItem<tauri::Wry>) {
         match tauri::async_runtime::block_on(updater.check()) {
             Ok(Some(update)) => {
                 let _ = item.set_text(format!("发现新版本 v{}…", update.version));
+                open_control_center(&app);
             }
             Ok(None) => {}
             Err(_) => {}

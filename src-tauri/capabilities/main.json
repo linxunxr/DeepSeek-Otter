@@ -1,8 +1,11 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "main-capability",
-  "description": "壳本地页面（加载页/诊断页/更新）的 IPC 权限；回环 dsh Web UI 不授予任何权限",
-  "windows": ["main"],
+  "description": "壳本地页面（加载页/控制中心）的 IPC 权限；回环 dsh Web UI 不授予任何权限",
+  "windows": [
+    "main",
+    "control"
+  ],
   "permissions": [
     "core:default",
     "core:event:default",

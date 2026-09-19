@@ -105,8 +105,8 @@ function renderPanel(): void {
 }
 
 // silent=true 供启动时的自动检查：无新版/失败不亮面板不打扰，
-// 仅发现新版才提示（下载安装仍由用户决定）；手动检查（托盘入口）全程显示状态。
-async function doCheck(silent = false): Promise<void> {
+// 仅发现新版才提示（下载安装仍由用户决定）；手动检查（托盘入口/控制中心按钮）全程显示状态。
+export async function doCheck(silent = false): Promise<void> {
   if (!silent) {
     panel.visible = true;
     panel.status = "checking";
