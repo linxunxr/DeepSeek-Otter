@@ -1,4 +1,5 @@
-// 壳页面的更新检查与安装 UI（托盘"检查更新"触发 / 手动按钮）。
+// 壳页面的更新检查与安装 UI：启动时自动静默检查（有新版才提示）+
+// 托盘"检查更新"手动触发。仅自动到"提示"为止，下载/安装由用户决定；
 // 安装前由 Rust 侧停掉 dsh 后端（Windows install 阶段应用会被退出）。
 
 import { check } from "@tauri-apps/plugin-updater";
@@ -53,22 +54,28 @@ function renderPanel(): void {
   }
 }
 
-async function doCheck(): Promise<void> {
-  panel.visible = true;
-  panel.status = "checking";
+// silent=true 供启动时的自动检查：无新版/失败不亮面板不打扰，
+// 仅发现新版才提示（下载安装仍由用户决定）；手动检查（托盘入口）全程显示状态。
+async function doCheck(silent = false): Promise<void> {
+  if (!silent) {
+    panel.visible = true;
+    panel.status = "checking";
+    renderPanel();
+  }
   panel.error = null;
   panel.notes = null;
-  renderPanel();
   try {
     const update = await check();
     if (update) {
+      panel.visible = true;
       panel.status = "available";
       panel.version = update.version;
       panel.notes = update.body ?? null;
-    } else {
+    } else if (!silent) {
       panel.status = "not-available";
     }
   } catch (e) {
+    if (silent) return;
     panel.status = "error";
     panel.error = typeof e === "string" ? e : String(e);
   }
@@ -120,4 +127,6 @@ closeBtn.addEventListener("click", () => {
 
 export function initUpdaterUI(): void {
   void listen("check-update", () => void doCheck());
+  // 启动时自动检查一次（静默）：有新版才亮提示面板。
+  void doCheck(true);
 }

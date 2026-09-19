@@ -239,5 +239,30 @@ fn setup_tray(app: &tauri::App) -> tauri::Result<()> {
     });
 
     builder.build(app)?;
+
+    // 驻留期更新轮询：关窗驻留可能多天不重启，启动时的壳页面检查覆盖不到，
+    // 定时拉一次清单补盲区（发现新版改写菜单项文字提示，仍不自动下载）。
+    spawn_update_poll(app.handle().clone(), check_update);
     Ok(())
+}
+
+/// 驻留期更新轮询间隔：24 小时。首轮等满一个间隔（启动检查已由壳页面做过）。
+const UPDATE_POLL_INTERVAL: std::time::Duration = std::time::Duration::from_secs(24 * 3600);
+
+/// 后台轮询新版本：发现新版把托盘"检查更新…"改为"发现新版本 vX.Y.Z…"，
+/// 用户点该项仍走壳页面的手动检查流程（看 notes、决定何时安装）。
+/// 仅提示不下载——不自动消耗流量；检查失败静默等下一轮。
+fn spawn_update_poll(app: tauri::AppHandle, item: MenuItem<tauri::Wry>) {
+    std::thread::spawn(move || loop {
+        std::thread::sleep(UPDATE_POLL_INTERVAL);
+        use tauri_plugin_updater::UpdaterExt;
+        let Ok(updater) = app.updater() else { continue };
+        match tauri::async_runtime::block_on(updater.check()) {
+            Ok(Some(update)) => {
+                let _ = item.set_text(format!("发现新版本 v{}…", update.version));
+            }
+            Ok(None) => {}
+            Err(_) => {}
+        }
+    });
 }

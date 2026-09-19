@@ -41,7 +41,7 @@ pnpm build
 
 **云函数中转**（代码在独立仓库 `github.com/linxunxr/Scf` 的 `gitee-sync/`，香港 Region **Web 函数** `gitee-sync-web`：HTTP 服务监听 9000 + `scf_bootstrap` 启动，函数 URL 免 CAM、应用层 secret 鉴权）：从 GitHub Release **动态解析附件名**（Tauri 产物名空格转点号，勿硬编码）后下载 setup.exe/.sig → 建/查 Gitee 发行版 → attach_files 上传（幂等）→ latest.json 升级为 Gitee-URL。之所以中转：GitHub Actions runner 直传 78MB 到 Gitee 跨洲超时 0 字节。**附件全量进内存 Buffer（下载 + base64 上传多份拷贝），SCF 内存须按附件体积 ~10 倍配置**——v0.1.1 附件 76MB 时 512MB 上限 OOM（ret_code 200402 "Task memory exceeded"，被 continue-on-error 掩盖、Gitee 停留旧版），已调 1024MB；附件再显著增大需同步调内存或改造为流式。SCF 事件函数形态曾三度翻车（CJS/ESM、热实例环境变量、草稿不落盘），经验全部沉淀在 Scf 仓库 `gitee-sync/README.md`。
 
-更新链路（客户端）：托盘"检查更新…" → 壳页面展示版本/进度 → 确认后 downloadAndInstall（Windows 安装时应用自动退出重装，重启后版本对齐机制自动处理 appData 的 dsh 重装）。双源 endpoint：Gitee raw `latest.json`（国内主）+ GitHub `releases/latest/download/latest.json`（兜底）；注意 **updater 只在拉清单阶段回退，下载 url 失败不回退**（灵鉴 v0.5.1 事故教训），故发布链路必须"先降级后升级"。
+更新链路（客户端）：自动更新只到"提示"级——启动时壳页面静默检查（发现新版才亮提示面板）+ 驻留期 Rust 侧每 24h 轮询（发现新版托盘菜单项改为"发现新版本 vX.Y.Z…"，见 lib.rs 的 `spawn_update_poll`）；下载/安装始终由用户经托盘"检查更新…"手动触发：壳页面展示版本/进度 → 确认后 downloadAndInstall（Windows 安装时应用自动退出重装，重启后版本对齐机制自动处理 appData 的 dsh 重装）。双源 endpoint：Gitee raw `latest.json`（国内主）+ GitHub `releases/latest/download/latest.json`（兜底）；注意 **updater 只在拉清单阶段回退，下载 url 失败不回退**（灵鉴 v0.5.1 事故教训），故发布链路必须"先降级后升级"。
 
 ## 测试
 
