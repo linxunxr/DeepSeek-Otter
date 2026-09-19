@@ -1,14 +1,23 @@
 name: Sync Gitee Manifest
 
-# 手动推送保底更新清单：从 GitHub Release 下载该版本 latest.json（GitHub-URL 版），
-# 用 sync-latest-to-gitee.mjs 提交到 Gitee 仓库根。云函数中转（附件 + Gitee-URL 升级）
-# 异常时的止损手段：国内用户经 Gitee 清单收到更新，下载走 GitHub（较慢但可用）。
+# 手动推送更新清单到 Gitee 仓库根：从 GitHub Release 下载该版本 latest.json
+# （notes 等字段由 CHANGELOG 单一事实源生成），按 url_mode 决定下载地址指向——
+# github=保底（云函数中转异常时的止损，下载走 GitHub 较慢但可用）；
+# gitee=透传换 Gitee 直链（附件已上传、仅清单不对时用，如云函数拼错 notes）。
 on:
   workflow_dispatch:
     inputs:
       version:
         description: "版本号（不带 v；GitHub Release 须已存在该 tag 的 latest.json）"
         required: true
+      url_mode:
+        description: "清单下载地址指向：github（保底）/ gitee（Gitee-URL，需附件已上传）"
+        required: false
+        default: "github"
+        type: choice
+        options:
+          - github
+          - gitee
 
 jobs:
   manifest:
@@ -18,10 +27,11 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 22
-      - name: 下载 GitHub-URL 清单并推送 Gitee
+      - name: 下载清单并按模式改写 URL 后推送 Gitee
         env:
           GITEE_TOKEN: ${{ secrets.GITEE_TOKEN }}
           VERSION: ${{ inputs.version }}
+          URL_MODE: ${{ inputs.url_mode }}
         run: |
           if [ -z "$GITEE_TOKEN" ]; then
             echo "::error::未配置 GITEE_TOKEN secret"
@@ -29,5 +39,17 @@ jobs:
           fi
           curl -sL --fail -o latest.json \
             "https://github.com/linxunxr/DeepSeek-Otter/releases/download/v${VERSION}/latest.json"
+          if [ "$URL_MODE" = "gitee" ]; then
+            # 透传 GitHub 清单，仅把下载 url 换成 Gitee 直链（附件须已由云函数上传）。
+            node -e '
+              const fs = require("fs");
+              const m = JSON.parse(fs.readFileSync("latest.json", "utf8"));
+              const p = m.platforms["windows-x86_64"];
+              const asset = p.url.split("/").pop();
+              p.url = `https://gitee.com/mwcxlinxun/deep-seek-otter/releases/download/v${m.version}/${asset}`;
+              fs.writeFileSync("latest.json", JSON.stringify(m, null, 2) + "\n");
+              console.log("Gitee-URL：", p.url);
+            '
+          fi
           cat latest.json; echo
           node scripts/sync-latest-to-gitee.mjs latest.json
