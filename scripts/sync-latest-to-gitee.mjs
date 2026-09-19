@@ -42,12 +42,19 @@ async function gitee(method, body) {
 }
 
 // 现有文件的 sha（决定创建 vs 更新）。
+// GET 不能带 JSON body（token 必须走 query，带 body 会被 Gitee 拒绝且状态码非 404，
+// 曾导致误判"不存在"→ POST 创建 → 400 文件名已存在）；仅 404 视为不存在。
 let sha;
-try {
-  const current = await gitee("GET", {});
-  sha = current?.sha;
-} catch {
-  /* 404 = 文件不存在，走创建 */
+{
+  const resp = await fetch(`${url}?access_token=${encodeURIComponent(token)}&ref=main`, {
+    signal: AbortSignal.timeout(30_000),
+  });
+  if (resp.ok) {
+    sha = (await resp.json())?.sha;
+  } else if (resp.status !== 404) {
+    const text = await resp.text();
+    throw new Error(`Gitee API ${resp.status} GET latest.json: ${text.slice(0, 200)}`);
+  }
 }
 
 try {

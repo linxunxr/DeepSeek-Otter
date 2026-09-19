@@ -1,0 +1,33 @@
+name: Sync Gitee Manifest
+
+# 手动推送保底更新清单：从 GitHub Release 下载该版本 latest.json（GitHub-URL 版），
+# 用 sync-latest-to-gitee.mjs 提交到 Gitee 仓库根。云函数中转（附件 + Gitee-URL 升级）
+# 异常时的止损手段：国内用户经 Gitee 清单收到更新，下载走 GitHub（较慢但可用）。
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "版本号（不带 v；GitHub Release 须已存在该 tag 的 latest.json）"
+        required: true
+
+jobs:
+  manifest:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: 下载 GitHub-URL 清单并推送 Gitee
+        env:
+          GITEE_TOKEN: ${{ secrets.GITEE_TOKEN }}
+          VERSION: ${{ inputs.version }}
+        run: |
+          if [ -z "$GITEE_TOKEN" ]; then
+            echo "::error::未配置 GITEE_TOKEN secret"
+            exit 1
+          fi
+          curl -sL --fail -o latest.json \
+            "https://github.com/linxunxr/DeepSeek-Otter/releases/download/v${VERSION}/latest.json"
+          cat latest.json; echo
+          node scripts/sync-latest-to-gitee.mjs latest.json
