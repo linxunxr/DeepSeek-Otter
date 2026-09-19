@@ -13,13 +13,6 @@ fn config_path(app: &tauri::AppHandle) -> Option<std::path::PathBuf> {
     app.path().app_data_dir().ok().map(|d| d.join("otter-models.json"))
 }
 
-pub fn patch_path(app: &tauri::AppHandle) -> Option<std::path::PathBuf> {
-    app.path()
-        .app_data_dir()
-        .ok()
-        .map(|d| d.join("otter-models.patch.yml"))
-}
-
 #[tauri::command]
 pub fn get_model_config(app: tauri::AppHandle) -> Option<String> {
     let path = config_path(&app)?;
@@ -41,6 +34,49 @@ pub fn set_model_config(app: tauri::AppHandle, config: String) -> Result<String,
     let patch = dir.join("otter-models.patch.yml");
     std::fs::write(&patch, yaml).map_err(|e| format!("写入 patch 失败：{e}"))?;
     Ok(patch.to_string_lossy().into_owned())
+}
+
+/// 后端每次 spawn 前调用：以 JSON 源为准重派生 patch，消除两文件漂移
+/// （v0.1.10 时曾出现"JSON 在、patch 丢"：UI 无改动则「保存」灰着、「重启」
+/// 又只重启不重建，配置永远生效不了）。JSON 缺失 → 清掉孤儿 patch 不注入；
+/// 派生失败（手改坏 JSON 等）→ 记日志、删旧 patch 降级启动，后端仍可用。
+pub fn ensure_patch(app: &tauri::AppHandle) -> Option<std::path::PathBuf> {
+    let dir = app.path().app_data_dir().ok()?;
+    let json = dir.join("otter-models.json");
+    let patch = dir.join("otter-models.patch.yml");
+    let log = |msg: &str| app.state::<crate::OtterState>().log.log(msg);
+    match sync_patch_files(&json, &patch) {
+        Ok(made) => made.then_some(patch),
+        Err(e) => {
+            log(&format!("[models] 重派生 patch 失败，本次不带供应商配置启动：{e}"));
+            None
+        }
+    }
+}
+
+/// 纯文件逻辑（可测）：JSON 存在则渲染并写 patch 返回 true；JSON 缺失则删除
+/// 孤儿 patch 返回 false；渲染失败删除旧 patch 后返回 Err（调用方决定降级策略）。
+fn sync_patch_files(json: &std::path::Path, patch: &std::path::Path) -> Result<bool, String> {
+    let Some(text) = std::fs::read_to_string(json).ok() else {
+        // JSON 没了（从未配置/被清理）：派生物一并清掉，保持"以源为准"。
+        let _ = std::fs::remove_file(patch);
+        return Ok(false);
+    };
+    let result = (|| -> Result<bool, String> {
+        let value: Value =
+            serde_json::from_str(&text).map_err(|e| format!("配置 JSON 非法：{e}"))?;
+        let yaml = render_patch_yaml(&value)?;
+        if let Some(parent) = patch.parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
+        std::fs::write(patch, yaml).map_err(|e| format!("写入 patch 失败：{e}"))?;
+        Ok(true)
+    })();
+    if result.is_err() {
+        // 坏配置不注入：删旧 patch，避免盘上残留与 JSON 不一致的派生物。
+        let _ = std::fs::remove_file(patch);
+    }
+    result
 }
 
 /// YAML 双引号转义（拼接安全：注入字符全部落在引号字符串内）。
@@ -218,5 +254,33 @@ mod tests {
         // 可选字段：空值直接省略，不产出该行。
         let none = serde_json::json!({ "providers": [{ "name": "gw" }] });
         assert!(!render_patch_yaml(&none).unwrap().contains("apiKeyEnv"));
+    }
+
+    /// spawn 前重派生：JSON 在则写 patch；JSON 缺失删孤儿；坏 JSON 报错并清残留。
+    #[test]
+    fn sync_patch_files_source_of_truth() {
+        let dir = std::env::temp_dir().join(format!("otter-patch-sync-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let json = dir.join("otter-models.json");
+        let patch = dir.join("otter-models.patch.yml");
+
+        // 1) JSON 在（哪怕 patch 丢失/过期）→ 重派生并写盘。
+        std::fs::write(&json, r#"{"providers":[{"name":"gw","apiKeyEnv":"GW_KEY"}]}"#).unwrap();
+        assert!(sync_patch_files(&json, &patch).unwrap());
+        assert!(patch.exists() && std::fs::read_to_string(&patch).unwrap().contains("gw:"));
+
+        // 2) 坏 JSON（含非法 apiKeyEnv）→ Err 且旧 patch 被清（坏配置不注入）。
+        std::fs::write(&json, r#"{"providers":[{"name":"gw","apiKeyEnv":"sk-bad"}]}"#).unwrap();
+        assert!(sync_patch_files(&json, &patch).is_err());
+        assert!(!patch.exists(), "坏配置后残留 patch 未清理");
+
+        // 3) JSON 缺失 → 孤儿 patch 删除、返回不注入。
+        std::fs::write(&patch, "stale").unwrap();
+        std::fs::remove_file(&json).unwrap();
+        assert!(!sync_patch_files(&json, &patch).unwrap());
+        assert!(!patch.exists(), "孤儿 patch 未清理");
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

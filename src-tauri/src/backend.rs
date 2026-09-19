@@ -365,8 +365,9 @@ impl Backend {
                 cmd.env("DSH_HOME", &custom);
             }
         }
-        // 控制中心"模型与供应商"页生成的独立 patch 层（不碰用户手写的 cordis.patch.yml）。
-        let patch = crate::models::patch_path(app).filter(|p| p.exists());
+        // 控制中心"模型与供应商"的独立 patch 层（不碰用户手写的 cordis.patch.yml）。
+        // 每次 spawn 前以 JSON 源重派生，杜绝两文件漂移（详见 models::ensure_patch）。
+        let patch = crate::models::ensure_patch(app);
         cmd.args(dsh_args(patch.as_deref()))
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())

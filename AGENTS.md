@@ -79,7 +79,7 @@ src-tauri/capabilities/   IPC 权限声明（仅授予壳本地页面，不授�
 - **壳与 dsh 强绑定（离线打包）**：dsh@pin 的完整依赖树打进安装包 resources（`runtime/dsh-store/`），首装纯离线拷贝到 `<appData>/dsh-runtime/install/`，零网络。运行时校验 store lock 与 upstream.json pin 一致，不一致拒绝启动——**升级 dsh 必须重发 Otter 版本**（改 upstream.json → fetch-runtime → 重新打包）。
 - **后端"不用即停"**：关窗 = 隐藏窗口 + 停止后端（见 lib.rs 的 `CloseRequested` 处理）；托盘点开 = 重启后端 + 恢复窗口。改生命周期逻辑时同步更新 `docs/桌面端设计方案.md`。
 - **dsh URL 必须从 stdout 解析**：dsh web 打印 `dsh web: http://127.0.0.1:<port>/?token=<…>`，token 是访问凭据（不带则 401）。壳不自拼 URL。
-- **启动命令**：统一 `<node> <dsh>/lib/bin.js web --no-open --port 0`（OS 分配端口），不经 npx/cmd，摆脱 PATH 依赖。带供应商配置时为 `web --patch <otter-models.patch.yml> --no-open --port 0`——**`--patch` 必须在 `web` 子命令之后**，dsh 拒绝出现在子命令之前的父级 flag（顺序拼反 = 启动即崩，v0.1.9 事故；验证 patch 相关改动必须真跑 `web` 启动路径，`--dump-config` 根级调用测不出顺序问题）。
+- **启动命令**：统一 `<node> <dsh>/lib/bin.js web --no-open --port 0`（OS 分配端口），不经 npx/cmd，摆脱 PATH 依赖。带供应商配置时为 `web --patch <otter-models.patch.yml> --no-open --port 0`——**`--patch` 必须在 `web` 子命令之后**，dsh 拒绝出现在子命令之前的父级 flag（顺序拼反 = 启动即崩，v0.1.9 事故；验证 patch 相关改动必须真跑 `web` 启动路径，`--dump-config` 根级调用测不出顺序问题）。patch 文件由 `models::ensure_patch` 在每次 spawn 前从 JSON 源重派生（JSON 缺失删孤儿、坏配置降级不带 patch），不要依赖"保存时写过一次"——两文件永不漂移。
 - **Windows 进程终止**：用 `taskkill /PID <pid> /T /F` 杀整个 npx→node 进程树（实测一次调用即可释放监听端口），不单独 kill 顶层进程。
 - **IPC 权限**：capability 只绑定壳本地页面。回环加载的 dsh Web UI 不授予任何 Tauri IPC 权限。
 - **提交规范**：`类型(范围): 中文概要——补充说明`，范围常用 `shell`（壳）/ `backend`（后端管理）/ `ui`（壳页面）/ `docs`。
