@@ -88,6 +88,7 @@ src-tauri/capabilities/   IPC 权限声明（仅授予壳本地页面，不授�
 
 ## 已知坑
 
+- **DSH_HOME 里 `profiles/node_modules` 若为真实目录会让 dsh 拒绝启动**（2026-09-20 用户实测踩坑）：dsh 0.1.5-rc.2 每次启动 `healProfilesModuleFallback` 要求该树下所有 fallback 目标是「指向 dsh 安装的 junction 或带管理标记的 module proxy」，遇到旧版 dsh 安装形态的真实目录（数据目录搬迁会原样带过来）逐个报 `exists and is not a symlink or dsh-managed module proxy`（先 `@deepseek-ai/dsh`，再 `cordis`、`@babel/…` 层层报）。修法：web profile 未装插件（package.json dependencies 为空）时 `profiles/node_modules` 整目录移走备份，dsh 下次启动自愈重建全部 junction；修完用 `web --no-open --port 0` 等就绪行验证。注意 `--dump-config` 走的 compose 路径测不出该错，必须真跑 `web`。
 - dsh 处于 developer preview，破坏性变更频发；每次发版前跑冒烟清单（启动 → 新建会话 → 发消息 → 关窗再开）。
 - `pnpm tauri build` 首次会从 GitHub 下载 NSIS（~2.4 MB），网络差会 `unexpected end of file` 失败；手动下载 nsis-3.11.zip 解压到 `%LOCALAPPDATA%\tauri\nsis-3.11\` 再重试。
 - `pnpm tauri build` 需要有效图标（`src-tauri/icons/icon.ico` 多尺寸）。源图 `app-icon.png`（1024×1024）由 `scripts/make-icon.ps1` 生成（PowerShell 5.1 读无 BOM 的 UTF-8 脚本会把中文注释读乱破坏解析，文件须带 BOM）；改图标流程：改脚本或换源图 → `pnpm tauri icon app-icon.png` 重新生成全套。
