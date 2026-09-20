@@ -622,6 +622,21 @@ el("migrate-sessions").addEventListener("click", async () => {
   }
 });
 
+// 长期记忆迁移
+el("migrate-memory").addEventListener("click", async () => {
+  const btn = el<HTMLButtonElement>("migrate-memory");
+  btn.disabled = true;
+  el("migrate-status").textContent = "正在迁移记忆…";
+  try {
+    const msg = await invoke<string>("migrate_zcode_memories");
+    el("migrate-status").textContent = msg;
+  } catch (e) {
+    el("migrate-status").textContent = `失败：${e}`;
+  } finally {
+    btn.disabled = false;
+  }
+});
+
 // 数据目录：弹窗选择目标（只读输入框 + 浏览按钮），确认后迁移切换。
 el<HTMLInputElement>("dsh-home-input").addEventListener("click", () => el<HTMLButtonElement>("browse-home").click());
 el("browse-home").addEventListener("click", async () => {

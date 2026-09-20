@@ -66,7 +66,9 @@ src-tauri/src/lib.rs      壳入口：窗口、托盘、单实例、关窗驻留
 src-tauri/src/backend.rs  dsh 后端生命周期状态机（安装/spawn/就绪解析/停止/自动重启）
 src-tauri/src/models.rs   模型与供应商配置（appData JSON 源 → 派生 YAML patch，--patch 注入 dsh；直填 key 经派生环境变量 OTTER_KEY_<路由名> 于 spawn 时注入，key 不落 dsh 配置）
 src-tauri/src/plugins.rs  插件市场（读 web profile package.json；装/卸经 dsh plugin 转发 pnpm）
-src-tauri/src/skills.rs   Skill 与迁移（扫 ~/.dsh/skills；Zcode skills/AGENTS.md 导入复制）
+src-tauri/src/skills.rs   Skill 管理与导入（扫 ~/.dsh/skills；Zcode skills 批量导入、AGENTS.md 迁移）
+src-tauri/src/sessions_archive.rs  会话归档（借内置 Node 的 node:sqlite 只读 Zcode 会话库，导出 Markdown 到 dshHome/imported-sessions/）
+src-tauri/src/memories.rs 长期记忆迁移（Zcode 按项目记忆库 → dshHome/memories/ 正文 + AGENTS.md 标记段常驻索引；dsh 全局指令注入预算 64KiB，故索引常驻正文按需读）
 src-tauri/src/logging.rs  落盘日志（appData/logs/otter-<日期>.log，按天滚动保留 7 份）
 src-tauri/src/state.rs    全局状态（Backend + FileLog + 壳页面 URL）
 src-tauri/tauri.conf.json Tauri 配置（窗口、打包目标、capability 绑定）

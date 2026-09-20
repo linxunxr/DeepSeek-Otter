@@ -485,7 +485,7 @@
 
         <section id="page-migrate">
           <h1>迁移工具</h1>
-          <p class="desc">从 Zcode 迁入个人配置与历史：全局指令、Skill 技能包、会话归档。</p>
+          <p class="desc">从 Zcode 迁入个人配置与历史：全局指令、Skill 技能包、长期记忆、会话归档。</p>
           <div class="card">
             <div style="display: flex; align-items: center; justify-content: space-between; gap: 10px">
               <div>
@@ -511,6 +511,15 @@
                 <div style="font-size: 12px; color: var(--muted)">Zcode 会话导出为 Markdown 归档（可查阅搜索），写入数据目录 imported-sessions\</div>
               </div>
               <button class="primary" id="migrate-sessions">导出会话</button>
+            </div>
+          </div>
+          <div class="card" style="margin-top: 14px">
+            <div style="display: flex; align-items: center; justify-content: space-between; gap: 10px">
+              <div>
+                <div style="font-size: 13px; font-weight: 600">长期记忆</div>
+                <div style="font-size: 12px; color: var(--muted)">~/.zcode/cli/memories → ~/.dsh/memories\（按项目分组），AGENTS.md 常驻索引；重复迁移整目录重建，建议先迁全局指令再迁本项</div>
+              </div>
+              <button class="primary" id="migrate-memory">迁移记忆</button>
             </div>
           </div>
           <p id="migrate-status" style="font-size: 12px; color: var(--muted); margin: 10px 0 0"></p>

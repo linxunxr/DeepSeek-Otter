@@ -11,6 +11,7 @@ use tauri::{
 
 mod backend;
 mod logging;
+mod memories;
 mod models;
 mod plugins;
 mod sessions_archive;
@@ -203,7 +204,8 @@ pub fn run() {
             skills::import_agents_md,
             settings::get_otter_settings,
             settings::migrate_dsh_home,
-            sessions_archive::migrate_zcode_sessions
+            sessions_archive::migrate_zcode_sessions,
+            memories::migrate_zcode_memories
         ])
         .setup(|app| {
             // 全局状态在 setup 里构造：需要 AppHandle 解析 appData（日志目录）。
