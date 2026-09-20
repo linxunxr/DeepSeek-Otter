@@ -64,7 +64,7 @@ index.html / src/         壳本地页面（加载页/诊断页，纯 TS，无�
 control.html / src/control.ts  控制中心页面（更新/模型与供应商/诊断，同一壳页面体系）
 src-tauri/src/lib.rs      壳入口：窗口、托盘、单实例、关窗驻留、IPC 命令、诊断导出
 src-tauri/src/backend.rs  dsh 后端生命周期状态机（安装/spawn/就绪解析/停止/自动重启）
-src-tauri/src/models.rs   模型与供应商配置（appData JSON 源 → 派生 YAML patch，--patch 注入 dsh；直填 key 经派生环境变量 OTTER_KEY_<路由名> 于 spawn 时注入，key 不落 dsh 配置）
+src-tauri/src/models.rs   模型与供应商配置（appData JSON 源 → dsh 官方热更新面：settings.yaml 的 llm-pi-ai/agent-default-model 节 + .credentials.yaml refs；读-改-写合并保留用户手写路由，删除经 otter-models.state.json 记账；保存即热生效无需重启）
 src-tauri/src/plugins.rs  插件市场（读 web profile package.json；装/卸经 dsh plugin 转发 pnpm）
 src-tauri/src/skills.rs   Skill 管理与导入（扫 ~/.dsh/skills；Zcode skills 批量导入、AGENTS.md 迁移）
 src-tauri/src/sessions_archive.rs  会话归档（借内置 Node 的 node:sqlite 只读 Zcode 会话库，导出 Markdown 到 dshHome/imported-sessions/）
@@ -81,7 +81,7 @@ src-tauri/capabilities/   IPC 权限声明（仅授予壳本地页面，不授�
 - **壳与 dsh 强绑定（离线打包）**：dsh@pin 的完整依赖树打进安装包 resources（`runtime/dsh-store/`），首装纯离线拷贝到 `<appData>/dsh-runtime/install/`，零网络。运行时校验 store lock 与 upstream.json pin 一致，不一致拒绝启动——**升级 dsh 必须重发 Otter 版本**（改 upstream.json → fetch-runtime → 重新打包）。
 - **后端"不用即停"**：关窗 = 隐藏窗口 + 停止后端（见 lib.rs 的 `CloseRequested` 处理）；托盘点开 = 重启后端 + 恢复窗口。改生命周期逻辑时同步更新 `docs/桌面端设计方案.md`。
 - **dsh URL 必须从 stdout 解析**：dsh web 打印 `dsh web: http://127.0.0.1:<port>/?token=<…>`，token 是访问凭据（不带则 401）。壳不自拼 URL。
-- **启动命令**：统一 `<node> <dsh>/lib/bin.js web --no-open --port 0`（OS 分配端口），不经 npx/cmd，摆脱 PATH 依赖。带供应商配置时为 `web --patch <otter-models.patch.yml> --no-open --port 0`——**`--patch` 必须在 `web` 子命令之后**，dsh 拒绝出现在子命令之前的父级 flag（顺序拼反 = 启动即崩，v0.1.9 事故；验证 patch 相关改动必须真跑 `web` 启动路径，`--dump-config` 根级调用测不出顺序问题）。patch 文件由 `models::ensure_patch` 在每次 spawn 前从 JSON 源重派生（JSON 缺失删孤儿、坏配置降级不带 patch），不要依赖"保存时写过一次"——两文件永不漂移。
+- **启动命令**：统一 `<node> <dsh>/lib/bin.js web --no-open --port 0`（OS 分配端口），不经 npx/cmd，摆脱 PATH 依赖。供应商配置**不走启动参数**（v0.1.4–v0.1.13 的 `--patch` overlay 是启动快照、不在 dsh watch 范围，改配置须重启；且 dsh 拒绝子命令前置的父级 flag，`--patch` 拼在 `web` 之前 = 启动即崩，v0.1.9 事故）——v0.1.14 起写 **dsh 官方热更新面**：provider 路由 → `$DSH_HOME/settings.yaml` 的 `llm-pi-ai.providers` 节，直填 key → `.credentials.yaml` 的 `refs`（ref 名 `OTTER_KEY_<路由名>`），chokidar 热发布、llm-pi-ai 路由内容按请求解析，**保存后下一请求即生效**（与 dsh Web UI 模型页同路径同格式）。同步逻辑 `models::sync_settings_files` 在保存与每次 spawn 前各幂等跑一次：合并语义（settings 名单外路由 = 用户手写，保留；删除路由经 state 记账精确移除；credentials 只动 `OTTER_KEY_` 前缀；`agent-default-model` 有默认才写）。已知取舍：两编辑器文件级并发无乐观锁，最后写者赢。
 - **Windows 进程终止**：用 `taskkill /PID <pid> /T /F` 杀整个 npx→node 进程树（实测一次调用即可释放监听端口），不单独 kill 顶层进程。
 - **IPC 权限**：capability 只绑定壳本地页面。回环加载的 dsh Web UI 不授予任何 Tauri IPC 权限。
 - **提交规范**：`类型(范围): 中文概要——补充说明`，范围常用 `shell`（壳）/ `backend`（后端管理）/ `ui`（壳页面）/ `docs`。

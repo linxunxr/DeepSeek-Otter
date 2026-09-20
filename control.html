@@ -383,7 +383,7 @@
         <section id="page-models">
           <h1>模型与供应商</h1>
           <p class="desc">
-            配置多个模型供应商（OpenAI 兼容网关等），新会话默认模型可切换。配置以独立层注入 dsh，不影响手写的高级配置；保存后需重启后端生效。
+            配置多个模型供应商（OpenAI 兼容网关等），新会话默认模型可切换。配置写入 dsh 官方设置（settings.yaml 热加载，不影响手写的高级配置），保存后即时生效、无需重启。
           </p>
           <div class="card">
             <div id="models-empty" class="placeholder" style="display: none">
@@ -410,7 +410,6 @@
 
           <div style="display: flex; gap: 10px; margin-top: 16px; align-items: center">
             <button class="primary" id="save-models" disabled>保存</button>
-            <button class="plain" id="restart-backend-btn" style="display: none">重启后端生效</button>
             <span id="models-status" style="color: var(--muted); font-size: 12px"></span>
           </div>
 

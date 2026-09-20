@@ -365,14 +365,11 @@ impl Backend {
                 cmd.env("DSH_HOME", &custom);
             }
         }
-        // 控制中心"模型与供应商"的独立 patch 层（不碰用户手写的 cordis.patch.yml）。
-        // 每次 spawn 前以 JSON 源重派生，杜绝两文件漂移（详见 models::ensure_patch）。
-        let patch = crate::models::ensure_patch(app);
-        // 直填 key 的供应商：key 本体只经进程环境注入（patch 里仅有派生变量名）。
-        for (name, value) in crate::models::env_bindings(app) {
-            cmd.env(name, value);
-        }
-        cmd.args(dsh_args(patch.as_deref()))
+        // 控制中心"模型与供应商"配置：写 dsh 官方热更新面（settings.yaml +
+        // .credentials.yaml，chokidar 热发布，详见 models::ensure_settings）。
+        // spawn 前幂等同步以 JSON 源为准（兜底升级路径与外部清理自愈）。
+        crate::models::ensure_settings(app);
+        cmd.args(dsh_args())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .stdin(Stdio::null());
@@ -436,19 +433,16 @@ impl Backend {
     }
 }
 
-/// dsh 启动参数。`web` 是子命令，`--patch` 必须跟在它后面：dsh 的参数解析拒绝
-/// 出现在子命令之前的父级 flag（"web takes none of parent --patch…"），顺序拼反
-/// dsh 会立即退出（v0.1.9 曾因此每 2 秒崩溃重试、页面无限"自动重连中"）。
-fn dsh_args(patch: Option<&Path>) -> Vec<std::ffi::OsString> {
-    let mut args: Vec<std::ffi::OsString> = vec!["web".into()];
-    if let Some(p) = patch {
-        args.push("--patch".into());
-        args.push(p.into());
-    }
-    args.push("--no-open".into());
-    args.push("--port".into());
-    args.push("0".into());
-    args
+/// dsh 启动参数。`web` 是子命令；供应商配置不走启动参数（v0.1.4–v0.1.13 的
+/// --patch overlay 是启动快照、改配置须重启，v0.1.14 起改写 settings.yaml
+/// 热更新面——当时「--patch 必须在 web 之后」的顺序约束随 --patch 一并退役）。
+fn dsh_args() -> Vec<std::ffi::OsString> {
+    vec![
+        "web".into(),
+        "--no-open".into(),
+        "--port".into(),
+        "0".into(),
+    ]
 }
 
 /// 把当前状态广播给壳页面（backend-status 事件）。
@@ -835,27 +829,13 @@ fn kill_pid_tree(pid: u32) {
 mod tests {
     use super::*;
 
-    /// 启动参数顺序：`--patch` 必须在 `web` 子命令之后（dsh 拒绝子命令前的
-    /// 父级 flag，v0.1.9 的无限崩溃重试即顺序拼反所致）。
+    /// 启动参数固定形态（v0.1.14 起无 --patch，供应商配置走 settings.yaml 热更新面）。
     #[test]
-    fn dsh_args_patch_follows_web_subcommand() {
+    fn dsh_args_fixed_form() {
         let to_str = |args: &Vec<std::ffi::OsString>| -> Vec<String> {
             args.iter().map(|a| a.to_string_lossy().into_owned()).collect()
         };
-        let with_patch = to_str(&dsh_args(Some(Path::new("C:/app data/otter-models.patch.yml"))));
-        let web_at = with_patch.iter().position(|a| a == "web").expect("缺 web 子命令");
-        let patch_at = with_patch
-            .iter()
-            .position(|a| a == "--patch")
-            .expect("缺 --patch");
-        assert!(patch_at > web_at, "顺序拼反：{with_patch:?}");
-        assert_eq!(with_patch[patch_at + 1], "C:/app data/otter-models.patch.yml");
-        assert_eq!(with_patch[0], "web");
-        // 无 patch 时（未配置供应商）只剩 web 固定参数。
-        assert_eq!(
-            to_str(&dsh_args(None)),
-            vec!["web", "--no-open", "--port", "0"]
-        );
+        assert_eq!(to_str(&dsh_args()), vec!["web", "--no-open", "--port", "0"]);
     }
 
     /// 就绪行解析：标准格式（实测 dsh 0.1.2-rc.1 输出）。

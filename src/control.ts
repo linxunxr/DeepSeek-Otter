@@ -67,7 +67,6 @@ function el<T extends HTMLElement>(id: string): T {
 function markDirty(dirty: boolean): void {
   modelDirty = dirty;
   (el<HTMLButtonElement>("save-models")).disabled = !dirty;
-  el<HTMLButtonElement>("restart-backend-btn").style.display = dirty ? "none" : "inline-block";
   el("models-status").textContent = dirty ? "有未保存的修改" : "";
 }
 
@@ -385,18 +384,9 @@ function initModelsPage(): void {
     try {
       await invoke("set_model_config", { config: JSON.stringify(modelConfig) });
       markDirty(false);
-      el("models-status").textContent = "已保存，重启后端后生效";
+      el("models-status").textContent = "已保存，即时生效（后端运行中下一请求生效；未运行则下次启动生效）";
     } catch (e) {
       el("models-status").textContent = `保存失败：${e}`;
-    }
-  });
-  el("restart-backend-btn").addEventListener("click", async () => {
-    el("models-status").textContent = "正在重启后端…";
-    try {
-      await invoke("restart_backend");
-      el("models-status").textContent = "后端重启中，稍后打开主窗口即可";
-    } catch (e) {
-      el("models-status").textContent = `重启失败：${e}`;
     }
   });
   // 加载已存配置。
