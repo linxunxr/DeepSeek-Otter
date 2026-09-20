@@ -24,3 +24,4 @@ src-tauri/resources/runtime/dsh-store/.package-lock.json
 .idea/
 .vscode/
 .playwright-mcp/
+.zcode/
