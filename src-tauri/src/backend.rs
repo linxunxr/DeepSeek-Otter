@@ -365,9 +365,10 @@ impl Backend {
                 cmd.env("DSH_HOME", &custom);
             }
         }
-        // 控制中心"模型与供应商"配置：写 dsh 官方热更新面（settings.yaml +
-        // .credentials.yaml，chokidar 热发布，详见 models::ensure_settings）。
-        // spawn 前幂等同步以 JSON 源为准（兜底升级路径与外部清理自愈）。
+        // 控制中心"模型与供应商"配置：写 dsh 官方热更新面（web profile 的
+        // cordis.patch.yml + .credentials.yaml，chokidar 热发布，详见
+        // models::ensure_settings）。spawn 前幂等同步以 JSON 源为准（兜底升级
+        // 路径与外部清理自愈）。
         crate::models::ensure_settings(app);
         cmd.args(dsh_args())
             .stdout(Stdio::piped())
@@ -434,8 +435,8 @@ impl Backend {
 }
 
 /// dsh 启动参数。`web` 是子命令；供应商配置不走启动参数（v0.1.4–v0.1.13 的
-/// --patch overlay 是启动快照、改配置须重启，v0.1.14 起改写 settings.yaml
-/// 热更新面——当时「--patch 必须在 web 之后」的顺序约束随 --patch 一并退役）。
+/// --patch overlay 是启动快照、改配置须重启，v0.1.14 起改写配置文件热更新面
+/// ——dsh 0.2.0 前为根 settings.yaml，0.2.0 起为 web profile 的 cordis.patch.yml）。
 fn dsh_args() -> Vec<std::ffi::OsString> {
     vec![
         "web".into(),
@@ -829,7 +830,7 @@ fn kill_pid_tree(pid: u32) {
 mod tests {
     use super::*;
 
-    /// 启动参数固定形态（v0.1.14 起无 --patch，供应商配置走 settings.yaml 热更新面）。
+    /// 启动参数固定形态（v0.1.14 起无 --patch，供应商配置走配置文件热更新面）。
     #[test]
     fn dsh_args_fixed_form() {
         let to_str = |args: &Vec<std::ffi::OsString>| -> Vec<String> {
